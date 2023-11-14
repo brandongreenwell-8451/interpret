@@ -1,16 +1,58 @@
 format: jb-book
-root: intro
-parts:
-- caption: Quick Overview
-  chapters:
-  - file: getting-started-intro
+root: index
+chapters:
+- file: interpret
+  sections:
+  - file: interpret-glassbox
     sections:
-    - file: getting-started
-  - file: what-the-faq
+    - file: ExplainableBoostingClassifier
+    - file: ExplainableBoostingRegressor
+    - file: LogisticRegression
+    - file: LinearRegression
+    - file: ClassificationTree
+    - file: RegressionTree
+    - file: DecisionListClassifier
+    - file: merge_ebms
+  - file: interpret-blackbox
     sections:
-    - file: faq
-- caption: Algorithms
-  chapters:
+    - file: ShapKernel
+    - file: LimeTabular
+    - file: PartialDependence
+    - file: MorrisSensitivity
+  - file: interpret-greybox
+    sections:
+    - file: ShapTree
+  - file: interpret-perf
+    sections:
+    - file: RegressionPerf
+    - file: ROC
+    - file: PR
+  - file: interpret-data
+    sections:
+    - file: ClassHistogram
+    - file: Marginal
+  - file: interpret-privacy
+    sections:
+    - file: DPExplainableBoostingClassifier
+    - file: DPExplainableBoostingRegressor
+  - file: interpret-utils
+    sections:
+    - file: measure_interactions
+  - file: interpret-develop
+    sections:
+    - file: debug_mode
+  - file: show
+  - file: show_link
+  - file: set_show_addr
+  - file: get_show_addr
+  - file: preserve
+  - file: shutdown_show_server
+  - file: init_show_server
+  - file: status_show_server
+  - file: set_visualize_provider
+  - file: get_visualize_provider
+- file: algorithms
+  sections:
   - file: glassbox
     sections:
     - file: ebm
@@ -26,20 +68,15 @@ parts:
   - file: privacy
     sections:
     - file: dpebm
-- caption: More EBMs
-  chapters:
-  - file: ebm-internals
-    sections:
-    - file: ebm-internals-regression
-    - file: ebm-internals-classification
-    - file: ebm-internals-multiclass
-- caption: Framework
-  chapters:
-  - file: framework
-- caption: Deployment Guide
-  chapters:
-  - file: deployment-guide
-- caption: Development Guide
-  chapters:
+- file: ebm-internals
+  sections:
+  - file: ebm-internals-regression
+  - file: ebm-internals-classification
+  - file: ebm-internals-multiclass
+- file: framework
+- file: deployment-guide
+- file: development
+  sections:
   - file: installation-guide
   - file: debugging-guide
+- file: faq

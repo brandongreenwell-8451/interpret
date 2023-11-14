@@ -2,18 +2,18 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include <stddef.h> // size_t, ptrdiff_t
 #include <limits> // std::numeric_limits
-#include <string.h> // strchr, memmove, memcpy
+#include <string.h> // strcpy, strchr, memmove, memcpy
 
 #include "libebm.h"
 #include "logging.h" // EBM_ASSERT
-#include "common_c.h" // LIKELY
-#include "zones.h"
+#include "unzoned.h" // LIKELY
 
-#include "common_cpp.hpp" // IsConvertError
+#include "zones.h"
+#include "common.hpp" // IsConvertError
 
 #include "ebm_internal.hpp" // FloatTickIncrement
 
@@ -384,6 +384,11 @@ static double StringToFloatWithFixup(
    }
 
    return ret;
+}
+
+INLINE_ALWAYS static char * strcpy_NO_WARNINGS(char * const dest, const char * const src) EBM_NOEXCEPT {
+   StopClangAnalysis();
+   return strcpy(dest, src);
 }
 
 static bool StringToFloatChopped(

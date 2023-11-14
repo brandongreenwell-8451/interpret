@@ -9,15 +9,20 @@
 
 #include <stddef.h> // size_t, ptrdiff_t
 #include <memory> // shared_ptr, unique_ptr
+#include <type_traits> // is_same
+#include <vector>
 
 #include "libebm.h" // ErrorEbm
 #include "logging.h" // EBM_ASSERT
-#include "common_c.h" // INLINE_ALWAYS
-#include "zones.h"
+#include "unzoned.h" // INLINE_ALWAYS
 
-#include "bridge_cpp.hpp" // IsRegressionOutput, etc.
+#include "zones.h"
+#include "bridge.hpp" // IsRegressionOutput, etc.
+
 #include "zoned_bridge_cpp_functions.hpp" // FunctionPointersCpp
 #include "compute.hpp" // GPU_GLOBAL
+#include "registration_exceptions.hpp"
+#include "Registration.hpp"
 
 struct ApplyUpdateBridge;
 
@@ -26,8 +31,8 @@ namespace DEFINED_ZONE_NAME {
 #error DEFINED_ZONE_NAME must be defined
 #endif // DEFINED_ZONE_NAME
 
-class Registration;
-typedef const std::vector<std::shared_ptr<const Registration>> (* REGISTER_OBJECTIVES_FUNCTION)();
+template<typename TFloat>
+static const std::vector<std::shared_ptr<const Registration>> RegisterObjectives();
 
 struct SingletaskObjective;
 struct BinaryObjective;
@@ -73,10 +78,10 @@ GPU_DEVICE inline GradientHessian<TFloat> MakeGradientHessian(const double gradi
 }
 
 
-template<typename TObjective, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, int cCompilerPack>
+template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, int cCompilerPack>
 GPU_GLOBAL static void RemoteApplyUpdate(const Objective * const pObjective, ApplyUpdateBridge * const pData) {
    const TObjective * const pObjectiveSpecific = static_cast<const TObjective *>(pObjective);
-   pObjectiveSpecific->template InjectedApplyUpdate<cCompilerScores, bValidation, bWeight, bHessian, cCompilerPack>(pData);
+   pObjectiveSpecific->template InjectedApplyUpdate<bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, cCompilerPack>(pData);
 }
 
 
@@ -123,52 +128,7 @@ private:
    }
 
 
-   // if we have multiple scores AND multiple bitpacks, then we have two nested loops in our final function
-   // and the compiler will only unroll the inner loop.  That inner loop will be for the scores, so there
-   // is not much benefit in generating hard coded loop counts for the bitpacks, so short circut the
-   // bit packing to use the dynamic value if we don't have the single bin case.  This also solves
-   // part of our template blowup issue of having N * M starting point templates where N is the number
-   // of scores and M is the number of bit packs.  If we use 8 * 16 that's already 128 copies of the
-   // templated function at this point and more later.  Reducing this to just 16 is very very helpful.
-   template<typename TObjective, typename TFloat, typename std::enable_if<!TObjective::IsMultiScore, void>::type * = nullptr>
-   INLINE_RELEASE_TEMPLATED ErrorEbm TypeApplyUpdate(ApplyUpdateBridge * const pData) const {
-      return OptionsApplyUpdate<TObjective, TFloat, k_oneScore>(pData);
-   }
-   template<typename TObjective, typename TFloat, typename std::enable_if<TObjective::IsMultiScore && std::is_base_of<MulticlassMultitaskObjective, TObjective>::value, void>::type * = nullptr>
-   INLINE_RELEASE_TEMPLATED ErrorEbm TypeApplyUpdate(ApplyUpdateBridge * const pData) const {
-      // multiclass multitask is going to need some really special handling, so use dynamic scores
-      return OptionsApplyUpdate<TObjective, TFloat, k_dynamicScores>(pData);
-   }
-   template<typename TObjective, typename TFloat, typename std::enable_if<TObjective::IsMultiScore && !std::is_base_of<MulticlassMultitaskObjective, TObjective>::value, void>::type * = nullptr>
-   INLINE_RELEASE_TEMPLATED ErrorEbm TypeApplyUpdate(ApplyUpdateBridge * const pData) const {
-      if(k_cItemsPerBitPackNone == pData->m_cPack) {
-         // don't blow up our complexity if we have only 1 bin or during init. Just use dynamic for the count of scores
-         return OptionsApplyUpdate<TObjective, TFloat, k_dynamicScores>(pData);
-      } else {
-         return CountScores<TObjective, TFloat, (k_cCompilerScoresMax < k_cCompilerScoresStart ? k_dynamicScores : k_cCompilerScoresStart)>::Func(this, pData);
-      }
-   }
-
-
-   template<typename TObjective, typename TFloat, size_t cCompilerScores>
-   struct CountScores final {
-      INLINE_ALWAYS static ErrorEbm Func(const Objective * const pObjective, ApplyUpdateBridge * const pData) {
-         if(cCompilerScores == pData->m_cScores) {
-            return pObjective->OptionsApplyUpdate<TObjective, TFloat, cCompilerScores>(pData);
-         } else {
-            return CountScores<TObjective, TFloat, k_cCompilerScoresMax == cCompilerScores ? k_dynamicScores : cCompilerScores + 1>::Func(pObjective, pData);
-         }
-      }
-   };
-   template<typename TObjective, typename TFloat>
-   struct CountScores<TObjective, TFloat, k_dynamicScores> final {
-      INLINE_ALWAYS static ErrorEbm Func(const Objective * const pObjective, ApplyUpdateBridge * const pData) {
-         return pObjective->OptionsApplyUpdate<TObjective, TFloat, k_dynamicScores>(pData);
-      }
-   };
-
-
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, typename std::enable_if<!TObjective::k_bRmse, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<!TObjective::k_bRmse, int>::type = 0>
    INLINE_RELEASE_TEMPLATED ErrorEbm OptionsApplyUpdate(ApplyUpdateBridge * const pData) const {
       if(EBM_FALSE != pData->m_bValidation) {
          static constexpr bool bValidation = true;
@@ -182,10 +142,10 @@ private:
 
          if(nullptr != pData->m_aWeights) {
             static constexpr bool bWeight = true;
-            return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian>(pData);
+            return ApproxApplyUpdate<TObjective, bValidation, bWeight, bHessian>(pData);
          } else {
             static constexpr bool bWeight = false;
-            return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian>(pData);
+            return ApproxApplyUpdate<TObjective, bValidation, bWeight, bHessian>(pData);
          }
       } else {
          static constexpr bool bValidation = false;
@@ -197,10 +157,10 @@ private:
          EBM_ASSERT(nullptr == pData->m_aWeights);
          static constexpr bool bWeight = false;
 
-         return HessianApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight>(pData);
+         return HessianApplyUpdate<TObjective, bValidation, bWeight>(pData);
       }
    }
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, typename std::enable_if<TObjective::k_bRmse, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<TObjective::k_bRmse, int>::type = 0>
    INLINE_RELEASE_TEMPLATED ErrorEbm OptionsApplyUpdate(ApplyUpdateBridge * const pData) const {
       EBM_ASSERT(nullptr != pData->m_aGradientsAndHessians); // we always keep gradients for regression
 
@@ -212,10 +172,10 @@ private:
 
          if(nullptr != pData->m_aWeights) {
             static constexpr bool bWeight = true;
-            return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian>(pData);
+            return ApproxApplyUpdate<TObjective, bValidation, bWeight, bHessian>(pData);
          } else {
             static constexpr bool bWeight = false;
-            return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian>(pData);
+            return ApproxApplyUpdate<TObjective, bValidation, bWeight, bHessian>(pData);
          }
       } else {
          static constexpr bool bValidation = false;
@@ -225,30 +185,102 @@ private:
          EBM_ASSERT(nullptr == pData->m_aWeights);
          static constexpr bool bWeight = false; // if we are not calculating the metric then we never need the weights
 
-         return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian>(pData);
+         return ApproxApplyUpdate<TObjective, bValidation, bWeight, bHessian>(pData);
       }
    }
 
-            
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, typename std::enable_if<!bValidation && HasHessian<TObjective>(), void>::type * = nullptr>
+   
+   template<typename TObjective, bool bValidation, bool bWeight, typename std::enable_if<HasHessian<TObjective>(), int>::type = 0>
    INLINE_RELEASE_TEMPLATED ErrorEbm HessianApplyUpdate(ApplyUpdateBridge * const pData) const {
       if(pData->m_bHessianNeeded) {
-         return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, true>(pData);
+         return ApproxApplyUpdate<TObjective, bValidation, bWeight, true>(pData);
       } else {
-         return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, false>(pData);
+         return ApproxApplyUpdate<TObjective, bValidation, bWeight, false>(pData);
       }
    }
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, typename std::enable_if<bValidation || !HasHessian<TObjective>(), void>::type * = nullptr>
+   template<typename TObjective, bool bValidation, bool bWeight, typename std::enable_if<!HasHessian<TObjective>(), int>::type = 0>
    INLINE_RELEASE_TEMPLATED ErrorEbm HessianApplyUpdate(ApplyUpdateBridge * const pData) const {
       EBM_ASSERT(!pData->m_bHessianNeeded);
-      return PackApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, false>(pData);
+      return ApproxApplyUpdate<TObjective, bValidation, bWeight, false>(pData);
    }
 
 
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, typename std::enable_if<k_oneScore == cCompilerScores && !TFloat::k_bCpu, void>::type * = nullptr>
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, typename std::enable_if<TObjective::k_bApprox, int>::type = 0>
+   INLINE_RELEASE_TEMPLATED ErrorEbm ApproxApplyUpdate(ApplyUpdateBridge * const pData) const {
+      if(EBM_FALSE != pData->m_bDisableApprox) {
+         return CountApplyUpdate<TObjective, bValidation, bWeight, bHessian, true>(pData);
+      } else {
+         return CountApplyUpdate<TObjective, bValidation, bWeight, bHessian, false>(pData);
+      }
+   }
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, typename std::enable_if<!TObjective::k_bApprox, int>::type = 0>
+   INLINE_RELEASE_TEMPLATED ErrorEbm ApproxApplyUpdate(ApplyUpdateBridge * const pData) const {
+      return CountApplyUpdate<TObjective, bValidation, bWeight, bHessian, false>(pData);
+   }
+
+
+   // if we have multiple scores AND multiple bitpacks, then we have two nested loops in our final function
+   // and the compiler will only unroll the inner loop.  That inner loop will be for the scores, so there
+   // is not much benefit in generating hard coded loop counts for the bitpacks, so short circut the
+   // bit packing to use the dynamic value if we don't have the single bin case.  This also solves
+   // part of our template blowup issue of having N * M starting point templates where N is the number
+   // of scores and M is the number of bit packs.  If we use 8 * 16 that's already 128 copies of the
+   // templated function at this point and more later.  Reducing this to just 16 is very very helpful.
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, typename std::enable_if<!TObjective::IsMultiScore, int>::type = 0>
+   INLINE_RELEASE_TEMPLATED ErrorEbm CountApplyUpdate(ApplyUpdateBridge * const pData) const {
+      return PackApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_oneScore>(pData);
+   }
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, typename std::enable_if<TObjective::IsMultiScore && (std::is_base_of<MulticlassMultitaskObjective, TObjective>::value || !bHessian || bDisableApprox), int>::type = 0>
+   INLINE_RELEASE_TEMPLATED ErrorEbm CountApplyUpdate(ApplyUpdateBridge * const pData) const {
+      // multiclass multitask is going to need some really special handling, so use dynamic scores, and skip the bit packing too
+      if(k_cItemsPerBitPackNone == pData->m_cPack) {
+         // don't blow up our complexity if we have only 1 bin or during init. Just use dynamic for the count of scores
+         return OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_dynamicScores, k_cItemsPerBitPackNone>(pData);
+      } else {
+         return OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_dynamicScores, k_cItemsPerBitPackDynamic>(pData);
+      }
+   }
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, typename std::enable_if<TObjective::IsMultiScore && !(std::is_base_of<MulticlassMultitaskObjective, TObjective>::value || !bHessian || bDisableApprox), int>::type = 0>
+   INLINE_RELEASE_TEMPLATED ErrorEbm CountApplyUpdate(ApplyUpdateBridge * const pData) const {
+      if(k_cItemsPerBitPackNone == pData->m_cPack) {
+         // don't blow up our complexity if we have only 1 bin or during init. Just use dynamic for the count of scores
+         return OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_dynamicScores, k_cItemsPerBitPackNone>(pData);
+      } else {
+         return CountScores<TObjective, bValidation, bWeight, bHessian, bDisableApprox, (k_cCompilerScoresMax < k_cCompilerScoresStart ? k_dynamicScores : k_cCompilerScoresStart)>::Func(this, pData);
+      }
+   }
+
+
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores>
+   struct CountScores final {
+      INLINE_ALWAYS static ErrorEbm Func(const Objective * const pObjective, ApplyUpdateBridge * const pData) {
+         if(cCompilerScores == pData->m_cScores) {
+            if(k_cItemsPerBitPackNone == pData->m_cPack) {
+               return pObjective->OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, k_cItemsPerBitPackNone>(pData);
+            } else {
+               return pObjective->OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, k_cItemsPerBitPackDynamic>(pData);
+            }
+         } else {
+            return CountScores<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_cCompilerScoresMax == cCompilerScores ? k_dynamicScores : cCompilerScores + 1>::Func(pObjective, pData);
+         }
+      }
+   };
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox>
+   struct CountScores<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_dynamicScores> final {
+      INLINE_ALWAYS static ErrorEbm Func(const Objective * const pObjective, ApplyUpdateBridge * const pData) {
+         if(k_cItemsPerBitPackNone == pData->m_cPack) {
+            return pObjective->OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_dynamicScores, k_cItemsPerBitPackNone>(pData);
+         } else {
+            return pObjective->OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, k_dynamicScores, k_cItemsPerBitPackDynamic>(pData);
+         }
+      }
+   };
+            
+
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, typename std::enable_if<!(bDisableApprox || ComputeFlags_Cpu == TObjective::TFloatInternal::k_zone), int>::type = 0>
    INLINE_RELEASE_TEMPLATED ErrorEbm PackApplyUpdate(ApplyUpdateBridge * const pData) const {
       if(k_cItemsPerBitPackNone == pData->m_cPack) {
-         return OperatorApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, k_cItemsPerBitPackNone>(pData);
+         return OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, k_cItemsPerBitPackNone>(pData);
       } else {
          // TODO: we're not currently getting much benefit from having a compile sized bitpack.  We benefit a little
          //       from having compile time constants as this frees registers.  The big win that we want is to
@@ -264,47 +296,47 @@ private:
          //       number of samples was divisible by the bitpack.  The we can change the code such that the compiler
          //       can optimize away the loop
 
-         return BitPack<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, GetFirstBitPack<typename TFloat::TInt::T>(TObjective::k_cItemsPerBitPackMax, TObjective::k_cItemsPerBitPackMin)>::Func(this, pData);
+         return BitPack<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, GetFirstBitPack<typename TObjective::TFloatInternal::TInt::T>(TObjective::k_cItemsPerBitPackMax, TObjective::k_cItemsPerBitPackMin)>::Func(this, pData);
       }
    }
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, typename std::enable_if<k_oneScore != cCompilerScores || TFloat::k_bCpu, void>::type * = nullptr>
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, typename std::enable_if<bDisableApprox || ComputeFlags_Cpu == TObjective::TFloatInternal::k_zone, int>::type = 0>
    INLINE_RELEASE_TEMPLATED ErrorEbm PackApplyUpdate(ApplyUpdateBridge * const pData) const {
       if(k_cItemsPerBitPackNone == pData->m_cPack) {
-         return OperatorApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, k_cItemsPerBitPackNone>(pData);
+         return OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, k_cItemsPerBitPackNone>(pData);
       } else {
-         return OperatorApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, k_cItemsPerBitPackDynamic>(pData);
+         return OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, k_cItemsPerBitPackDynamic>(pData);
       }
    }
 
 
    // in our current format cCompilerScores will always be 1, but just in case we change our code to allow
    // for special casing multiclass with compile time unrolling of the compiler pack, leave cCompilerScores here
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, int cCompilerPack>
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, int cCompilerPack>
    struct BitPack final {
       INLINE_ALWAYS static ErrorEbm Func(const Objective * const pObjective, ApplyUpdateBridge * const pData) {
          if(cCompilerPack == pData->m_cPack) {
-            return pObjective->OperatorApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, cCompilerPack>(pData);
+            return pObjective->OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, cCompilerPack>(pData);
          } else {
-            return BitPack<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, GetNextBitPack<typename TFloat::TInt::T>(cCompilerPack, TObjective::k_cItemsPerBitPackMin)>::Func(pObjective, pData);
+            return BitPack<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, GetNextBitPack<typename TObjective::TFloatInternal::TInt::T>(cCompilerPack, TObjective::k_cItemsPerBitPackMin)>::Func(pObjective, pData);
          }
       }
    };
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian>
-   struct BitPack<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, k_cItemsPerBitPackDynamic> final {
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores>
+   struct BitPack<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, k_cItemsPerBitPackDynamic> final {
       INLINE_ALWAYS static ErrorEbm Func(const Objective * const pObjective, ApplyUpdateBridge * const pData) {
-         return pObjective->OperatorApplyUpdate<TObjective, TFloat, cCompilerScores, bValidation, bWeight, bHessian, k_cItemsPerBitPackDynamic>(pData);
+         return pObjective->OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, k_cItemsPerBitPackDynamic>(pData);
       }
    };
 
 
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, int cCompilerPack>
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, int cCompilerPack>
    INLINE_RELEASE_TEMPLATED ErrorEbm OperatorApplyUpdate(ApplyUpdateBridge * const pData) const {
-      return TFloat::template OperatorApplyUpdate<TObjective, cCompilerScores, bValidation, bWeight, bHessian, cCompilerPack>(this, pData);
+      return TObjective::TFloatInternal::template OperatorApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, cCompilerPack>(this, pData);
    }
 
 protected:
 
-   template<typename TObjective, typename TFloat, bool bHessian, typename std::enable_if<bHessian, void>::type * = nullptr>
+   template<typename TObjective, typename TFloat, bool bHessian, typename std::enable_if<bHessian, int>::type = 0>
    GPU_DEVICE INLINE_ALWAYS typename TFloat::T * HandleGradHess(
       typename TFloat::T * const pGradientAndHessian,
       const TFloat & sampleScore,
@@ -318,7 +350,7 @@ protected:
       hessian.Store(pGradientAndHessian + TFloat::k_cSIMDPack);
       return pGradientAndHessian + (TFloat::k_cSIMDPack + TFloat::k_cSIMDPack);
    }
-   template<typename TObjective, typename TFloat, bool bHessian, typename std::enable_if<!bHessian, void>::type * = nullptr>
+   template<typename TObjective, typename TFloat, bool bHessian, typename std::enable_if<!bHessian, int>::type = 0>
    GPU_DEVICE INLINE_ALWAYS typename TFloat::T * HandleGradHess(
       typename TFloat::T * const pGradientAndHessian, 
       const TFloat & sampleScore, 
@@ -330,8 +362,9 @@ protected:
       return pGradientAndHessian + TFloat::k_cSIMDPack;
    }
 
-   template<typename TObjective, typename TFloat, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, int cCompilerPack>
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, int cCompilerPack>
    GPU_DEVICE NEVER_INLINE void ChildApplyUpdate(ApplyUpdateBridge * const pData) const {
+      using TFloat = typename TObjective::TFloatInternal;
       const TObjective * const pObjective = static_cast<const TObjective *>(this);
 
       static_assert(k_oneScore == cCompilerScores, "We special case the classifiers so do not need to handle them");
@@ -475,14 +508,13 @@ protected:
       }
    }
 
-
-   template<typename TObjective, typename TFloat>
+   template<typename TObjective>
    INLINE_RELEASE_TEMPLATED ErrorEbm ParentApplyUpdate(ApplyUpdateBridge * const pData) const {
       static_assert(IsEdgeObjective<TObjective>(), "TObjective must inherit from one of the children of the Objective class");
-      return TypeApplyUpdate<TObjective, TFloat>(pData);
+      return OptionsApplyUpdate<TObjective>(pData);
    }
 
-   template<typename TObjective, typename TFloat, typename std::enable_if<TFloat::k_bCpu && TObjective::k_outputType == OutputType_Regression, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<ComputeFlags_Cpu == TObjective::TFloatInternal::k_zone && TObjective::k_outputType == OutputType_Regression, int>::type = 0>
    INLINE_RELEASE_TEMPLATED BoolEbm TypeCheckTargets(const size_t c, const void * const aTargets) const noexcept {
       // regression
       EBM_ASSERT(1 <= c);
@@ -497,41 +529,41 @@ protected:
       } while(pTargetEnd != pTarget);
       return EBM_FALSE;
    }
-   template<typename TObjective, typename TFloat, typename std::enable_if<TFloat::k_bCpu && TObjective::k_outputType == OutputType_GeneralClassification, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<ComputeFlags_Cpu == TObjective::TFloatInternal::k_zone && TObjective::k_outputType == OutputType_GeneralClassification, int>::type = 0>
    INLINE_RELEASE_TEMPLATED BoolEbm TypeCheckTargets(const size_t c, const void * const aTargets) const noexcept {
       // classification
       UNUSED(c);
       UNUSED(aTargets);
       return EBM_FALSE;
    }
-   template<typename TObjective, typename TFloat, typename std::enable_if<TFloat::k_bCpu && TObjective::k_outputType == OutputType_Ranking, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<ComputeFlags_Cpu == TObjective::TFloatInternal::k_zone && TObjective::k_outputType == OutputType_Ranking, int>::type = 0>
    INLINE_RELEASE_TEMPLATED BoolEbm TypeCheckTargets(const size_t c, const void * const aTargets) const noexcept {
       // classification
       UNUSED(c);
       UNUSED(aTargets);
       return EBM_FALSE;
    }
-   template<typename TObjective, typename TFloat, typename std::enable_if<TFloat::k_bCpu, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<ComputeFlags_Cpu == TObjective::TFloatInternal::k_zone, int>::type = 0>
    inline BoolEbm ParentCheckTargets(const size_t c, const void * const aTargets) const noexcept {
       static_assert(IsEdgeObjective<TObjective>(), "TObjective must inherit from one of the children of the Objective class");
-      return TypeCheckTargets<TObjective, TFloat>(c, aTargets);
+      return TypeCheckTargets<TObjective>(c, aTargets);
    }
 
-   template<typename TObjective, typename TFloat, typename std::enable_if<TFloat::k_bCpu, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<ComputeFlags_Cpu == TObjective::TFloatInternal::k_zone, int>::type = 0>
    INLINE_RELEASE_TEMPLATED static void SetCpu(ObjectiveWrapper * const pObjectiveWrapper) noexcept {
       FunctionPointersCpp * const pFunctionPointers = static_cast<FunctionPointersCpp *>(pObjectiveWrapper->m_pFunctionPointersCpp);
       pFunctionPointers->m_pFinishMetricCpp = &TObjective::StaticFinishMetric;
       pFunctionPointers->m_pCheckTargetsCpp = &TObjective::StaticCheckTargets;
    }
-   template<typename TObjective, typename TFloat, typename std::enable_if<!TFloat::k_bCpu, void>::type * = nullptr>
+   template<typename TObjective, typename std::enable_if<ComputeFlags_Cpu != TObjective::TFloatInternal::k_zone, int>::type = 0>
    INLINE_RELEASE_TEMPLATED static void SetCpu(ObjectiveWrapper * const pObjectiveWrapper) noexcept {
       FunctionPointersCpp * const pFunctionPointers = static_cast<FunctionPointersCpp *>(pObjectiveWrapper->m_pFunctionPointersCpp);
       pFunctionPointers->m_pFinishMetricCpp = nullptr;
       pFunctionPointers->m_pCheckTargetsCpp = nullptr;
    }
 
-   template<typename TObjective, typename TFloat>
-   INLINE_RELEASE_TEMPLATED void FillObjectiveWrapper(const bool bCpuOnly, void * const pWrapperOut) noexcept {
+   template<typename TObjective>
+   INLINE_RELEASE_TEMPLATED void FillObjectiveWrapper(const ComputeFlags zones, void * const pWrapperOut) noexcept {
       EBM_ASSERT(nullptr != pWrapperOut);
       ObjectiveWrapper * const pObjectiveWrapperOut = static_cast<ObjectiveWrapper *>(pWrapperOut);
       FunctionPointersCpp * const pFunctionPointers =
@@ -541,46 +573,55 @@ protected:
       pFunctionPointers->m_pApplyUpdateCpp = &TObjective::StaticApplyUpdate;
       
       const auto bMaximizeMetric = TObjective::k_bMaximizeMetric;
-      static_assert(std::is_same<decltype(bMaximizeMetric), const BoolEbm>::value, "TObjective::k_bMaximizeMetric should be a BoolEbm");
+      constexpr bool bMaximizeMetricGood = std::is_same<decltype(bMaximizeMetric), const BoolEbm>::value;
+      static_assert(bMaximizeMetricGood, "TObjective::k_bMaximizeMetric should be a BoolEbm");
       pObjectiveWrapperOut->m_bMaximizeMetric = bMaximizeMetric;
 
       pObjectiveWrapperOut->m_linkFunction = TObjective::k_linkFunction;
 
       const auto linkParam = (static_cast<TObjective *>(this))->LinkParam();
-      static_assert(std::is_same<decltype(linkParam), const double>::value, "this->LinkParam() should return a double");
+      constexpr bool bLinkParamGood = std::is_same<decltype(linkParam), const double>::value;
+      static_assert(bLinkParamGood, "this->LinkParam() should return a double");
       pObjectiveWrapperOut->m_linkParam = linkParam;
 
       const auto learningRateAdjustmentDifferentialPrivacy = (static_cast<TObjective *>(this))->LearningRateAdjustmentDifferentialPrivacy();
-      static_assert(std::is_same<decltype(learningRateAdjustmentDifferentialPrivacy), const double>::value, 
+      constexpr bool bLearningRateAdjustmentDifferentialPrivacyGood = std::is_same<decltype(learningRateAdjustmentDifferentialPrivacy), const double>::value;
+      static_assert(bLearningRateAdjustmentDifferentialPrivacyGood,
          "this->LearningRateAdjustmentDifferentialPrivacy() should return a double");
       pObjectiveWrapperOut->m_learningRateAdjustmentDifferentialPrivacy = learningRateAdjustmentDifferentialPrivacy;
 
       const auto learningRateAdjustmentGradientBoosting = (static_cast<TObjective *>(this))->LearningRateAdjustmentGradientBoosting();
-      static_assert(std::is_same<decltype(learningRateAdjustmentGradientBoosting), const double>::value, 
+      constexpr bool bLearningRateAdjustmentGradientBoostingGood = std::is_same<decltype(learningRateAdjustmentGradientBoosting), const double>::value;
+      static_assert(bLearningRateAdjustmentGradientBoostingGood,
          "this->LearningRateAdjustmentGradientBoosting() should return a double");
       pObjectiveWrapperOut->m_learningRateAdjustmentGradientBoosting = learningRateAdjustmentGradientBoosting;
 
       const auto learningRateAdjustmentHessianBoosting = (static_cast<TObjective *>(this))->LearningRateAdjustmentHessianBoosting();
-      static_assert(std::is_same<decltype(learningRateAdjustmentHessianBoosting), const double>::value, 
+      constexpr bool bLearningRateAdjustmentHessianBoostingGood = std::is_same<decltype(learningRateAdjustmentHessianBoosting), const double>::value;
+      static_assert(bLearningRateAdjustmentHessianBoostingGood,
          "this->LearningRateAdjustmentHessianBoosting() should return a double");
       pObjectiveWrapperOut->m_learningRateAdjustmentHessianBoosting = learningRateAdjustmentHessianBoosting;
 
       const auto gainAdjustmentGradientBoosting = (static_cast<TObjective *>(this))->GainAdjustmentGradientBoosting();
-      static_assert(std::is_same<decltype(gainAdjustmentGradientBoosting), const double>::value, 
+      constexpr bool bGainAdjustmentGradientBoostingGood = std::is_same<decltype(gainAdjustmentGradientBoosting), const double>::value;
+      static_assert(bGainAdjustmentGradientBoostingGood,
          "this->GainAdjustmentGradientBoosting() should return a double");
       pObjectiveWrapperOut->m_gainAdjustmentGradientBoosting = gainAdjustmentGradientBoosting;
 
       const auto gainAdjustmentHessianBoosting = (static_cast<TObjective *>(this))->GainAdjustmentHessianBoosting();
-      static_assert(std::is_same<decltype(gainAdjustmentHessianBoosting), const double>::value, 
+      constexpr bool bGainAdjustmentHessianBoostingGood = std::is_same<decltype(gainAdjustmentHessianBoosting), const double>::value;
+      static_assert(bGainAdjustmentHessianBoostingGood,
          "this->GainAdjustmentHessianBoosting() should return a double");
       pObjectiveWrapperOut->m_gainAdjustmentHessianBoosting = gainAdjustmentHessianBoosting;
 
       const auto gradientConstant = (static_cast<TObjective *>(this))->GradientConstant();
-      static_assert(std::is_same<decltype(gradientConstant), const double>::value, "this->GradientConstant() should return a double");
+      constexpr bool bGradientConstantGood = std::is_same<decltype(gradientConstant), const double>::value;
+      static_assert(bGradientConstantGood, "this->GradientConstant() should return a double");
       pObjectiveWrapperOut->m_gradientConstant = gradientConstant;
       
       const auto hessianConstant = (static_cast<TObjective *>(this))->HessianConstant();
-      static_assert(std::is_same<decltype(hessianConstant), const double>::value, "this->HessianConstant() should return a double");
+      constexpr bool bHessianConstantGood = std::is_same<decltype(hessianConstant), const double>::value;
+      static_assert(bHessianConstantGood, "this->HessianConstant() should return a double");
       pObjectiveWrapperOut->m_hessianConstant = hessianConstant;
 
       pObjectiveWrapperOut->m_bObjectiveHasHessian = HasHessian<TObjective>() ? EBM_TRUE : EBM_FALSE;
@@ -588,9 +629,9 @@ protected:
 
       pObjectiveWrapperOut->m_pObjective = this;
 
-      pObjectiveWrapperOut->m_bCpuOnly = bCpuOnly ? EBM_TRUE : EBM_FALSE;
+      pObjectiveWrapperOut->m_zones = zones;
 
-      SetCpu<TObjective, TFloat>(pObjectiveWrapperOut);
+      SetCpu<TObjective>(pObjectiveWrapperOut);
    }
 
    Objective() = default;
@@ -598,13 +639,92 @@ protected:
 
 public:
 
+   template<typename TFloat>
    static ErrorEbm CreateObjective(
-      const REGISTER_OBJECTIVES_FUNCTION registerObjectivesFunction,
       const Config * const pConfig,
       const char * const sObjective,
       const char * const sObjectiveEnd,
       ObjectiveWrapper * const pObjectiveWrapperOut
-   ) noexcept;
+   ) noexcept {
+      EBM_ASSERT(nullptr != pConfig);
+      EBM_ASSERT(1 <= pConfig->cOutputs);
+      EBM_ASSERT(EBM_FALSE == pConfig->isDifferentialPrivacy || EBM_TRUE == pConfig->isDifferentialPrivacy);
+      EBM_ASSERT(nullptr != sObjective);
+      EBM_ASSERT(nullptr != sObjectiveEnd);
+      EBM_ASSERT(sObjective < sObjectiveEnd); // empty string not allowed
+      EBM_ASSERT('\0' != *sObjective);
+      EBM_ASSERT(!(0x20 == *sObjective || (0x9 <= *sObjective && *sObjective <= 0xd)));
+      EBM_ASSERT('\0' == *sObjectiveEnd);
+      EBM_ASSERT(nullptr != pObjectiveWrapperOut);
+      EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+      EBM_ASSERT(nullptr != pObjectiveWrapperOut->m_pFunctionPointersCpp);
+
+      LOG_0(Trace_Info, "Entered Objective::CreateObjective");
+
+      ErrorEbm error;
+
+      try {
+         const std::vector<std::shared_ptr<const Registration>> registrations = RegisterObjectives<TFloat>();
+         const bool bFailed = Registration::CreateRegistrable(pConfig, sObjective, sObjectiveEnd, pObjectiveWrapperOut, registrations);
+         if(!bFailed) {
+            EBM_ASSERT(nullptr != pObjectiveWrapperOut->m_pObjective);
+
+            LOG_0(Trace_Info, "Exited Objective::CreateObjective");
+            return Error_None;
+         }
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Info, "Exited Objective::CreateObjective unknown objective");
+         error = Error_ObjectiveUnknown;
+      } catch(const ParamValMalformedException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective ParamValMalformedException");
+         error = Error_ObjectiveParamValMalformed;
+      } catch(const ParamUnknownException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective ParamUnknownException");
+         error = Error_ObjectiveParamUnknown;
+      } catch(const RegistrationConstructorException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective RegistrationConstructorException");
+         error = Error_ObjectiveConstructorException;
+      } catch(const ParamValOutOfRangeException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective ParamValOutOfRangeException");
+         error = Error_ObjectiveParamValOutOfRange;
+      } catch(const ParamMismatchWithConfigException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective ParamMismatchWithConfigException");
+         error = Error_ObjectiveParamMismatchWithConfig;
+      } catch(const IllegalRegistrationNameException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective IllegalRegistrationNameException");
+         error = Error_ObjectiveIllegalRegistrationName;
+      } catch(const IllegalParamNameException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective IllegalParamNameException");
+         error = Error_ObjectiveIllegalParamName;
+      } catch(const DuplicateParamNameException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective DuplicateParamNameException");
+         error = Error_ObjectiveDuplicateParamName;
+      } catch(const NonPrivateRegistrationException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective NonPrivateRegistrationException");
+         error = Error_ObjectiveNonPrivate;
+      } catch(const NonPrivateParamException &) {
+         EBM_ASSERT(nullptr == pObjectiveWrapperOut->m_pObjective);
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective NonPrivateParamException");
+         error = Error_ObjectiveParamNonPrivate;
+      } catch(const std::bad_alloc &) {
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective Out of Memory");
+         error = Error_OutOfMemory;
+      } catch(...) {
+         LOG_0(Trace_Warning, "WARNING Objective::CreateObjective internal error, unknown exception");
+         error = Error_UnexpectedInternal;
+      }
+
+      return error;
+   }
 };
 static_assert(std::is_standard_layout<Objective>::value && std::is_trivially_copyable<Objective>::value,
    "This allows offsetof, memcpy, memset, inter-language, GPU and cross-machine use where needed");
@@ -696,42 +816,44 @@ protected:
 };
 
 
-#define OBJECTIVE_CONSTANTS_BOILERPLATE(__EBM_TYPE, __MAXIMIZE_METRIC, __LINK_FUNCTION, cItemsPerBitPackMax, cItemsPerBitPackMin) \
+#define OBJECTIVE_CONSTANTS_BOILERPLATE(__EBM_TYPE, __MAXIMIZE_METRIC, __LINK_FUNCTION, bApprox, cItemsPerBitPackMax, cItemsPerBitPackMin) \
    public: \
+      using TFloatInternal = TFloat; \
       static constexpr bool k_bRmse = false; \
+      static constexpr bool k_bApprox = (bApprox); \
       static constexpr BoolEbm k_bMaximizeMetric = (__MAXIMIZE_METRIC); \
       static constexpr LinkEbm k_linkFunction = (__LINK_FUNCTION); \
       static constexpr OutputType k_outputType = GetOutputType(k_linkFunction); \
       static constexpr int k_cItemsPerBitPackMax = (cItemsPerBitPackMax); \
       static constexpr int k_cItemsPerBitPackMin = (cItemsPerBitPackMin); \
       static ErrorEbm StaticApplyUpdate(const Objective * const pThis, ApplyUpdateBridge * const pData) { \
-         return (static_cast<const __EBM_TYPE<TFloat> *>(pThis))->ParentApplyUpdate<const __EBM_TYPE<TFloat>, TFloat>(pData); \
+         return (static_cast<const __EBM_TYPE<TFloat> *>(pThis))->ParentApplyUpdate<const __EBM_TYPE<TFloat>>(pData); \
       } \
-      template<typename T = void, typename std::enable_if<TFloat::k_bCpu, T>::type * = nullptr> \
+      template<typename T = void, typename std::enable_if<ComputeFlags_Cpu == TFloat::k_zone, T>::type * = nullptr> \
       static double StaticFinishMetric(const Objective * const pThis, const double metricSum) { \
          return (static_cast<const __EBM_TYPE<TFloat> *>(pThis))->FinishMetric(metricSum); \
       } \
-      template<typename T = void, typename std::enable_if<TFloat::k_bCpu, T>::type * = nullptr> \
+      template<typename T = void, typename std::enable_if<ComputeFlags_Cpu == TFloat::k_zone, T>::type * = nullptr> \
       static BoolEbm StaticCheckTargets(const Objective * const pThis, const size_t c, const void * const aTargets) { \
-         return (static_cast<const __EBM_TYPE<TFloat> *>(pThis))->ParentCheckTargets<const __EBM_TYPE<TFloat>, TFloat>(c, aTargets); \
+         return (static_cast<const __EBM_TYPE<TFloat> *>(pThis))->ParentCheckTargets<const __EBM_TYPE<TFloat>>(c, aTargets); \
       } \
-      void FillWrapper(const bool bCpuOnly, void * const pWrapperOut) noexcept { \
+      void FillWrapper(const ComputeFlags zones, void * const pWrapperOut) noexcept { \
          static_assert( \
             std::is_same<__EBM_TYPE<TFloat>, typename std::remove_pointer<decltype(this)>::type>::value, \
             "*Objective types mismatch"); \
-         FillObjectiveWrapper<typename std::remove_pointer<decltype(this)>::type, TFloat>(bCpuOnly, pWrapperOut); \
+         FillObjectiveWrapper<typename std::remove_pointer<decltype(this)>::type>(zones, pWrapperOut); \
       }
 
 #define OBJECTIVE_TEMPLATE_BOILERPLATE \
    public: \
-      template<size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, int cCompilerPack> \
+      template<bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, int cCompilerPack> \
       GPU_DEVICE void InjectedApplyUpdate(ApplyUpdateBridge * const pData) const { \
-         Objective::ChildApplyUpdate<typename std::remove_pointer<decltype(this)>::type, TFloat, \
-            cCompilerScores, bValidation, bWeight, bHessian, cCompilerPack>(pData); \
+         Objective::ChildApplyUpdate<typename std::remove_pointer<decltype(this)>::type, \
+            bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, cCompilerPack>(pData); \
       }
 
 #define OBJECTIVE_BOILERPLATE(__EBM_TYPE, __MAXIMIZE_METRIC, __LINK_FUNCTION) \
-   OBJECTIVE_CONSTANTS_BOILERPLATE(__EBM_TYPE, __MAXIMIZE_METRIC, __LINK_FUNCTION, k_cItemsPerBitPackDynamic, k_cItemsPerBitPackDynamic) \
+   OBJECTIVE_CONSTANTS_BOILERPLATE(__EBM_TYPE, __MAXIMIZE_METRIC, __LINK_FUNCTION, false, k_cItemsPerBitPackDynamic, k_cItemsPerBitPackDynamic) \
    OBJECTIVE_TEMPLATE_BOILERPLATE
 
 } // DEFINED_ZONE_NAME

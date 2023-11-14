@@ -59,11 +59,10 @@ compile_file() {
    l3_file_unsanitized="$3"
    l3_obj_path_unsanitized="$4"
    l3_asm="$5"
-   l3_zone="$6"
 
    l3_file_sanitized=`sanitize "$l3_file_unsanitized"`
    l3_file_body_unsanitized=`get_file_body "$l3_file_unsanitized"`
-   l3_object_full_file_unsanitized="$l3_obj_path_unsanitized/${l3_file_body_unsanitized}_$l3_zone.o"
+   l3_object_full_file_unsanitized="$l3_obj_path_unsanitized/${l3_file_body_unsanitized}.o"
    l3_object_full_file_sanitized=`sanitize "$l3_object_full_file_unsanitized"`
    g_all_object_files_sanitized="$g_all_object_files_sanitized $l3_object_full_file_sanitized"
    l3_compile_specific="$l3_compiler $l3_compiler_args_sanitized -c $l3_file_sanitized -o $l3_object_full_file_sanitized 2>&1"
@@ -89,42 +88,19 @@ compile_file() {
       # - https://linux.die.net/man/1/as
 
       # If this fails then ignore the error and we'll just be missing this file.
-      l3_asm_full_file_unsanitized="$l3_obj_path_unsanitized/${l3_file_body_unsanitized}_$l3_zone.s"
+      l3_asm_full_file_unsanitized="$l3_obj_path_unsanitized/${l3_file_body_unsanitized}.s"
       l3_asm_full_file_sanitized=`sanitize "$l3_asm_full_file_unsanitized"`
       l3_compile_specific_asm="$l3_compiler $l3_compiler_args_sanitized -fverbose-asm -S $l3_file_sanitized -o $l3_asm_full_file_sanitized 2>&1"
       l3_compile_out_asm=`eval "$l3_compile_specific_asm"`
    fi
 }
 
-compile_directory_c() {
-   l4_compiler="$1"
-   l4_compiler_args_sanitized="$2"
-   l4_src_path_unsanitized="$3"
-   l4_obj_path_unsanitized="$4"
-   l4_asm="$5"
-   l4_zone="$6"
-
-   # zsh (default shell in macs) terminates if you try to glob expand zero results, so check first
-   find "$l4_src_path_unsanitized" -maxdepth 1 -type f -name '*.c' 2>/dev/null | grep -q .
-   l4_ret_code=$?
-   if [ $l4_ret_code -eq 0 ]; then 
-      # use globs with preceeding directory per: https://dwheeler.com/essays/filenames-in-shell.html
-      for l4_file_unsanitized in "$l4_src_path_unsanitized"/*.c ; do
-         # glob expansion returns *.c when there are no matches, so we need to check for the existance of the file
-         if [ -f "$l4_file_unsanitized" ] ; then
-            compile_file "$l4_compiler" "$l4_compiler_args_sanitized" "$l4_file_unsanitized" "$l4_obj_path_unsanitized" "$l4_asm" "$l4_zone"
-         fi
-      done
-   fi
-}
-
-compile_directory_cpp() {
+compile_directory() {
    l5_compiler="$1"
    l5_compiler_args_sanitized="$2"
    l5_src_path_unsanitized="$3"
    l5_obj_path_unsanitized="$4"
    l5_asm="$5"
-   l5_zone="$6"
 
    # zsh (default shell in macs) terminates if you try to glob expand zero results, so check first
    find "$l5_src_path_unsanitized" -maxdepth 1 -type f -name '*.cpp' 2>/dev/null | grep -q .
@@ -134,7 +110,7 @@ compile_directory_cpp() {
       for l5_file_unsanitized in "$l5_src_path_unsanitized"/*.cpp ; do
          # glob expansion returns *.cpp when there are no matches, so we need to check for the existance of the file
          if [ -f "$l5_file_unsanitized" ] ; then
-            compile_file "$l5_compiler" "$l5_compiler_args_sanitized" "$l5_file_unsanitized" "$l5_obj_path_unsanitized" "$l5_asm" "$l5_zone"
+            compile_file "$l5_compiler" "$l5_compiler_args_sanitized" "$l5_file_unsanitized" "$l5_obj_path_unsanitized" "$l5_asm"
          fi
       done
    fi
@@ -143,14 +119,12 @@ compile_directory_cpp() {
 compile_compute() {
    l6_compiler="$1"
    l6_compiler_args_sanitized="$2"
-   l6_src_path_sanitized="$3"
-   l6_src_path_unsanitized="$4"
-   l6_obj_path_unsanitized="$5"
-   l6_asm="$6"
-   l6_zone="$7"
+   l6_src_path_unsanitized="$3"
+   l6_obj_path_unsanitized="$4"
+   l6_asm="$5"
+   l6_zone="$6"
 
-   compile_directory_cpp "$l6_compiler" "$l6_compiler_args_sanitized -DZONE_$l6_zone" "$l6_src_path_unsanitized/compute" "$l6_obj_path_unsanitized" "$l6_asm" "$l6_zone"
-   compile_directory_cpp "$l6_compiler" "$l6_compiler_args_sanitized -I$l6_src_path_sanitized/compute/${l6_zone}_ebm -DZONE_$l6_zone" "$l6_src_path_unsanitized/compute/${l6_zone}_ebm" "$l6_obj_path_unsanitized" "$l6_asm" "$l6_zone"
+   compile_directory "$l6_compiler" "$l6_compiler_args_sanitized -DZONE_$l6_zone" "$l6_src_path_unsanitized/compute/${l6_zone}_ebm" "$l6_obj_path_unsanitized" "$l6_asm"
 }
 
 link_file() {
@@ -231,7 +205,7 @@ copy_asm_files() {
    fi
 }
 
-if [ -n "${CC}" ] && [ -n "${CXX}" ]; then
+if [ -n "${CXX}" ]; then
    code_path="./shared/libebm"
    tmp_path="./tmp/mk"
 
@@ -251,17 +225,15 @@ if [ -n "${CC}" ] && [ -n "${CXX}" ]; then
    mkdir ./python/interpret-core/interpret
    mkdir ./python/interpret-core/interpret/lib
 
-   extras="-DLIBEBM_EXPORTS -DNDEBUG -I$code_path/inc -I$code_path/common_c -I$code_path/common_cpp -I$code_path/bridge_c -I$code_path/bridge_cpp -I$code_path -I$code_path/compute -I$code_path/compute/objectives -I$code_path/compute/metrics"
+   extras="-DLIBEBM_EXPORTS -DNDEBUG -I$code_path/inc -I$code_path/unzoned -I$code_path/bridge -I$code_path -I$code_path/compute -I$code_path/compute/objectives -I$code_path/compute/metrics"
 
    mkdir ./tmp
    mkdir ./tmp/mk
    mkdir ./staging
 
    printf "Building from environment specified compiler\n"
-   printf "%s\n" "CC=${CC}"
    printf "%s\n" "CXX=${CXX}"
    printf "%s\n" "CPPFLAGS=${CPPFLAGS}"
-   printf "%s\n" "CFLAGS=${CFLAGS}"
    printf "%s\n" "CXXFLAGS=${CXXFLAGS}"
 
    printf "%s\n" "LDFLAGS=${LDFLAGS}"
@@ -299,13 +271,9 @@ if [ -n "${CC}" ] && [ -n "${CXX}" ]; then
    ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/InnerBag.cpp" -o "$tmp_path/InnerBag.o"
    ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/Tensor.cpp" -o "$tmp_path/Tensor.o"
    ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/TensorTotalsBuild.cpp" -o "$tmp_path/TensorTotalsBuild.o"
-   ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/compute/Objective.cpp" -o "$tmp_path/Objective.o"
-   ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/compute/Registration.cpp" -o "$tmp_path/Registration.o"
-   ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/compute/zoned_bridge_c_functions.cpp" -o "$tmp_path/zoned_bridge_c_functions.o"
+   ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/unzoned/logging.cpp" -o "$tmp_path/logging.o"
+   ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/unzoned/unzoned.cpp" -o "$tmp_path/unzoned.o"
    ${CXX} -c ${CPPFLAGS} ${CXXFLAGS} ${extras} -DZONE_cpu "$code_path/compute/cpu_ebm/cpu_64.cpp" -o "$tmp_path/cpu_64.o"
-
-   ${CC} -c ${CPPFLAGS} ${CFLAGS} ${extras} -DZONE_cpu "$code_path/common_c/common_c.c" -o "$tmp_path/common_c.o"
-   ${CC} -c ${CPPFLAGS} ${CFLAGS} ${extras} -DZONE_cpu "$code_path/common_c/logging.c" -o "$tmp_path/logging.o"
 
    ${CXX} ${LDFLAGS} -shared \
    "$tmp_path/ApplyTermUpdate.o" \
@@ -339,12 +307,9 @@ if [ -n "${CC}" ] && [ -n "${CXX}" ]; then
    "$tmp_path/InnerBag.o" \
    "$tmp_path/Tensor.o" \
    "$tmp_path/TensorTotalsBuild.o" \
-   "$tmp_path/Objective.o" \
-   "$tmp_path/Registration.o" \
-   "$tmp_path/zoned_bridge_c_functions.o" \
-   "$tmp_path/cpu_64.o" \
-   "$tmp_path/common_c.o" \
    "$tmp_path/logging.o" \
+   "$tmp_path/unzoned.o" \
+   "$tmp_path/cpu_64.o" \
    ${LOADLIBES} ${LDLIBS} -o "$final_binary"
 
    exit 0
@@ -408,61 +373,53 @@ src_path_sanitized=`sanitize "$src_path_unsanitized"`
 # a good referenece on writing shared libraries is at: https://akkadia.org/drepper/dsohowto.pdf
 
 # re-enable these warnings when they are better supported by g++ or clang: -Wduplicated-cond -Wduplicated-branches -Wrestrict
-both_args=""
-both_args="$both_args -Wall -Wextra"
-both_args="$both_args -Wunused-result"
-both_args="$both_args -Wno-parentheses"
-both_args="$both_args -Wdouble-promotion"
-both_args="$both_args -Wshadow"
-both_args="$both_args -Wformat=2"
-both_args="$both_args -fvisibility=hidden"
-both_args="$both_args -fno-math-errno -fno-trapping-math"
+all_args="-std=c++11"
+all_args="$all_args -Wall -Wextra"
+all_args="$all_args -Wunused-result"
+all_args="$all_args -Wdouble-promotion"
+all_args="$all_args -Wold-style-cast"
+all_args="$all_args -Wshadow"
+all_args="$all_args -Wformat=2"
+all_args="$all_args -Wno-format-nonliteral"
+all_args="$all_args -Wno-parentheses"
+all_args="$all_args -fvisibility=hidden -fvisibility-inlines-hidden"
+all_args="$all_args -fno-math-errno -fno-trapping-math"
 # TODO: once we have highly efficient tightly looped code, try no -fpic and see if that makes better code.  The compiler can save a register in this case. See https://akkadia.org/drepper/dsohowto.pdf
 # TODO: check no-plt compiler option
-both_args="$both_args -fpic"
-both_args="$both_args -pthread"
-both_args="$both_args -DLIBEBM_EXPORTS"
+all_args="$all_args -fpic"
+all_args="$all_args -pthread"
+all_args="$all_args -DLIBEBM_EXPORTS"
 if [ $is_extra_debugging -ne 0 ]; then 
-   both_args="$both_args -g"
+   all_args="$all_args -g"
 fi
 
+all_args="$all_args -I$src_path_sanitized/inc"
 
-c_args="-std=c11 -Wstrict-prototypes"
+unzoned_args=""
+unzoned_args="$unzoned_args -I$src_path_sanitized/unzoned"
 
-cpp_args="-std=c++11"
-cpp_args="$cpp_args -Wold-style-cast"
-cpp_args="$cpp_args -fvisibility-inlines-hidden"
-
-common_args="-I$src_path_sanitized/inc"
-common_args="$common_args -I$src_path_sanitized/common_c"
-common_args="$common_args -I$src_path_sanitized/common_cpp"
-
-bridge_args="$common_args"
-bridge_args="$bridge_args -I$src_path_sanitized/bridge_c"
-bridge_args="$bridge_args -I$src_path_sanitized/bridge_cpp"
-
-main_args="$bridge_args"
-main_args="$main_args -I$src_path_sanitized"
-
-compute_args="$bridge_args"
+compute_args=""
+compute_args="$compute_args -I$src_path_sanitized/unzoned"
+compute_args="$compute_args -I$src_path_sanitized/bridge"
 compute_args="$compute_args -I$src_path_sanitized/compute"
 compute_args="$compute_args -I$src_path_sanitized/compute/objectives"
 compute_args="$compute_args -I$src_path_sanitized/compute/metrics"
 
-# add any other non-include options
-common_args="$common_args -Wno-format-nonliteral"
+main_args="-DZONE_main"
+main_args="$main_args -I$src_path_sanitized/unzoned"
+main_args="$main_args -I$src_path_sanitized/bridge"
+main_args="$main_args -I$src_path_sanitized"
 
 link_args=""
 
 os_type=`uname`
 
 if [ "$os_type" = "Linux" ]; then
-   c_compiler=gcc
    cpp_compiler=g++
 
-   # try moving some of these g++ specific warnings into both_args if clang eventually supports them
-   both_args="$both_args -Wlogical-op"
-   both_args="$both_args -march=core2"
+   # try moving some of these g++ specific warnings into the shared all_args if clang eventually supports them
+   all_args="$all_args -Wlogical-op"
+   all_args="$all_args -march=core2"
 
    # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
    link_args="$link_args -Wl,--version-script=$src_path_sanitized/libebm_exports.txt"
@@ -489,29 +446,25 @@ if [ "$os_type" = "Linux" ]; then
    if [ $release_64 -eq 1 ]; then
       ########################## Linux release|x64
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for Linux release|x64"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for Linux release|x64"
       obj_path_unsanitized="$tmp_path_unsanitized/gcc/obj/release/linux/x64/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/gcc/bin/release/linux/x64/libebm"
       bin_file="libebm_linux_x64.so"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_release_linux_x64_build_log.txt"
-      both_args_extra="-m64 -DNDEBUG -O3 -DBRIDGE_AVX2_32 -Wl,--wrap=memcpy -Wl,--wrap=exp -Wl,--wrap=log -Wl,--wrap=log2,--wrap=pow,--wrap=expf,--wrap=logf"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -m64 -DNDEBUG -O3 -DBRIDGE_AVX2_32 -DBRIDGE_AVX512F_32 -Wl,--wrap=memcpy -Wl,--wrap=exp -Wl,--wrap=log -Wl,--wrap=log2,--wrap=pow,--wrap=expf,--wrap=logf"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="$link_args $cpp_args_specific"
    
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" "$is_asm" "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" "$is_asm" "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx512f" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx512f"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx2 -mfma" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx2"
-      compile_file "$cpp_compiler" "$cpp_args_specific" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" "$is_asm" "NONE"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_file "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" "$is_asm"
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" "$is_asm"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx2 -mfma" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx2"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx512f" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx512f"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm"
+      link_file "$cpp_compiler" "$link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"
@@ -521,29 +474,25 @@ if [ "$os_type" = "Linux" ]; then
    if [ $debug_64 -eq 1 ]; then
       ########################## Linux debug|x64
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for Linux debug|x64"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for Linux debug|x64"
       obj_path_unsanitized="$tmp_path_unsanitized/gcc/obj/debug/linux/x64/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/gcc/bin/debug/linux/x64/libebm"
       bin_file="libebm_linux_x64_debug.so"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_debug_linux_x64_build_log.txt"
-      both_args_extra="-m64 -O1 -DBRIDGE_AVX2_32 -Wl,--wrap=memcpy -Wl,--wrap=exp -Wl,--wrap=log -Wl,--wrap=log2,--wrap=pow,--wrap=expf,--wrap=logf"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -m64 -O1 -DBRIDGE_AVX2_32 -DBRIDGE_AVX512F_32 -Wl,--wrap=memcpy -Wl,--wrap=exp -Wl,--wrap=log -Wl,--wrap=log2,--wrap=pow,--wrap=expf,--wrap=logf"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="$link_args $cpp_args_specific"
    
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx512f" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx2 -mfma" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
-      compile_file "$cpp_compiler" "$cpp_args_specific" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" 0 "NONE"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_file "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" 0
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" 0
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx2 -mfma" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx512f" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0
+      link_file "$cpp_compiler" "$link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"
@@ -552,30 +501,26 @@ if [ "$os_type" = "Linux" ]; then
    if [ $release_32 -eq 1 ]; then
       ########################## Linux release|x86
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for Linux release|x86"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for Linux release|x86"
       obj_path_unsanitized="$tmp_path_unsanitized/gcc/obj/release/linux/x86/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/gcc/bin/release/linux/x86/libebm"
       bin_file="libebm_linux_x86.so"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_release_linux_x86_build_log.txt"
-      both_args_extra="-msse2 -mfpmath=sse -m32 -DNDEBUG -O3"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -msse2 -mfpmath=sse -m32 -DNDEBUG -O3"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="$link_args $cpp_args_specific"
       
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
       check_install "$tmp_path_unsanitized" "g++-multilib"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx512f" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx2 -mfma" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
-      compile_file "$cpp_compiler" "$cpp_args_specific" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" 0 "NONE"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_file "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" 0
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" 0
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx2 -mfma" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx512f" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0
+      link_file "$cpp_compiler" "$link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"
@@ -584,30 +529,26 @@ if [ "$os_type" = "Linux" ]; then
    if [ $debug_32 -eq 1 ]; then
       ########################## Linux debug|x86
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for Linux debug|x86"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for Linux debug|x86"
       obj_path_unsanitized="$tmp_path_unsanitized/gcc/obj/debug/linux/x86/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/gcc/bin/debug/linux/x86/libebm"
       bin_file="libebm_linux_x86_debug.so"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_debug_linux_x86_build_log.txt"
-      both_args_extra="-msse2 -mfpmath=sse -m32 -O1"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -msse2 -mfpmath=sse -m32 -O1"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="$link_args $cpp_args_specific"
       
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
       check_install "$tmp_path_unsanitized" "g++-multilib"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx512f" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx2 -mfma" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
-      compile_file "$cpp_compiler" "$cpp_args_specific" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" 0 "NONE"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_file "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized"/special/linux_wrap_functions.cpp "$obj_path_unsanitized" 0
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" 0
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx2 -mfma" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx512f" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0
+      link_file "$cpp_compiler" "$link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"
@@ -620,11 +561,11 @@ elif [ "$os_type" = "Darwin" ]; then
    release_arm=$release_64
    debug_arm=$debug_64
 
-   # try moving some of these clang specific warnings into both_args if g++ eventually supports them
-   c_compiler=clang
+   # try moving some of these clang specific warnings into the shared all_args if g++ eventually supports them
    cpp_compiler=clang++
-   both_args="$both_args -Wnull-dereference"
-   both_args="$both_args -Wgnu-zero-variadic-macro-arguments"
+   
+   all_args="$all_args -Wnull-dereference"
+   all_args="$all_args -Wgnu-zero-variadic-macro-arguments"
 
    # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
    link_args="$link_args -dynamiclib"
@@ -644,28 +585,24 @@ elif [ "$os_type" = "Darwin" ]; then
    if [ $release_64 -eq 1 ]; then
       ########################## macOS release|x64
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for macOS release|x64"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for macOS release|x64"
       obj_path_unsanitized="$tmp_path_unsanitized/clang/obj/release/mac/x64/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/clang/bin/release/mac/x64/libebm"
       bin_file="libebm_mac_x64.dylib"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_release_mac_x64_build_log.txt"
-      both_args_extra="-march=core2 -target x86_64-apple-macos10.12 -m64 -DNDEBUG -O3 -DBRIDGE_AVX2_32"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -march=core2 -target x86_64-apple-macos10.12 -m64 -DNDEBUG -O3 -DBRIDGE_AVX2_32 -DBRIDGE_AVX512F_32"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="-install_name @rpath/$bin_file $link_args $cpp_args_specific"
    
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" "$is_asm" "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" "$is_asm" "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx512f" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx512f"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx2 -mfma" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx2"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" "$is_asm"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx2 -mfma" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx2"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx512f" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "avx512f"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm"
+      link_file "$cpp_compiler" "-install_name @rpath/$bin_file $link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"
@@ -675,28 +612,24 @@ elif [ "$os_type" = "Darwin" ]; then
    if [ $debug_64 -eq 1 ]; then
       ########################## macOS debug|x64
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for macOS debug|x64"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for macOS debug|x64"
       obj_path_unsanitized="$tmp_path_unsanitized/clang/obj/debug/mac/x64/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/clang/bin/debug/mac/x64/libebm"
       bin_file="libebm_mac_x64_debug.dylib"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_debug_mac_x64_build_log.txt"
-      both_args_extra="-march=core2 -target x86_64-apple-macos10.12 -m64 -O1 -DBRIDGE_AVX2_32 -fsanitize=address,undefined -fno-sanitize-recover=address,undefined -fno-optimize-sibling-calls -fno-omit-frame-pointer"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -march=core2 -target x86_64-apple-macos10.12 -m64 -O1 -DBRIDGE_AVX2_32 -DBRIDGE_AVX512F_32 -fsanitize=address,undefined -fno-sanitize-recover=address,undefined -fno-optimize-sibling-calls -fno-omit-frame-pointer"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="-install_name @rpath/$bin_file $link_args $cpp_args_specific"
    
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx512f" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args -mavx2 -mfma" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" 0
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx2 -mfma" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx2"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args -mavx512f" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "avx512f"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0
+      link_file "$cpp_compiler" "-install_name @rpath/$bin_file $link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"
@@ -705,26 +638,22 @@ elif [ "$os_type" = "Darwin" ]; then
    if [ $release_arm -eq 1 ]; then
       ########################## macOS release|arm
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for macOS release|arm"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for macOS release|arm"
       obj_path_unsanitized="$tmp_path_unsanitized/clang/obj/release/mac/arm/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/clang/bin/release/mac/arm/libebm"
       bin_file="libebm_mac_arm.dylib"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_release_mac_arm_build_log.txt"
-      both_args_extra="-target arm64-apple-macos11 -m64 -DNDEBUG -O3"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -target arm64-apple-macos11 -m64 -DNDEBUG -O3"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="-install_name @rpath/$bin_file $link_args $cpp_args_specific"
    
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" "$is_asm" "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" "$is_asm" "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" "$is_asm"
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm" "cpu"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" "$is_asm"
+      link_file "$cpp_compiler" "-install_name @rpath/$bin_file $link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"
@@ -734,26 +663,22 @@ elif [ "$os_type" = "Darwin" ]; then
    if [ $debug_arm -eq 1 ]; then
       ########################## macOS debug|arm
 
-      printf "%s\n" "Compiling libebm with $c_compiler/$cpp_compiler for macOS debug|arm"
+      printf "%s\n" "Compiling libebm with $cpp_compiler for macOS debug|arm"
       obj_path_unsanitized="$tmp_path_unsanitized/clang/obj/debug/mac/arm/libebm"
       bin_path_unsanitized="$tmp_path_unsanitized/clang/bin/debug/mac/arm/libebm"
       bin_file="libebm_mac_arm_debug.dylib"
       g_log_file_unsanitized="$obj_path_unsanitized/libebm_debug_mac_arm_build_log.txt"
-      both_args_extra="-target arm64-apple-macos11 -m64 -O1 -fsanitize=address,undefined -fno-sanitize-recover=address,undefined -fno-optimize-sibling-calls -fno-omit-frame-pointer"
-      c_args_specific="$c_args $both_args $both_args_extra"
-      cpp_args_specific="$cpp_args $both_args $both_args_extra"
+      specific_args="$all_args -target arm64-apple-macos11 -m64 -O1 -fsanitize=address,undefined -fno-sanitize-recover=address,undefined -fno-optimize-sibling-calls -fno-omit-frame-pointer"
       # the linker wants to have the most dependent .o/.so/.dylib files listed FIRST
-      link_args_specific="-install_name @rpath/$bin_file $link_args $cpp_args_specific"
    
       g_all_object_files_sanitized=""
       g_compile_out_full=""
 
       make_initial_paths_simple "$obj_path_unsanitized" "$bin_path_unsanitized"
-      compile_directory_c "$c_compiler" "$c_args_specific $common_args" "$src_path_unsanitized/common_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_c "$c_compiler" "$c_args_specific $bridge_args" "$src_path_unsanitized/bridge_c" "$obj_path_unsanitized" 0 "C"
-      compile_directory_cpp "$cpp_compiler" "$cpp_args_specific $main_args -DZONE_cpu" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      compile_compute "$cpp_compiler" "$cpp_args_specific $compute_args" "$src_path_sanitized" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
-      link_file "$cpp_compiler" "$link_args_specific" "$bin_path_unsanitized" "$bin_file"
+      compile_directory "$cpp_compiler" "$specific_args $unzoned_args" "$src_path_unsanitized/unzoned" "$obj_path_unsanitized" 0
+      compile_compute "$cpp_compiler" "$specific_args $compute_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0 "cpu"
+      compile_directory "$cpp_compiler" "$specific_args $main_args" "$src_path_unsanitized" "$obj_path_unsanitized" 0
+      link_file "$cpp_compiler" "-install_name @rpath/$bin_file $link_args $specific_args" "$bin_path_unsanitized" "$bin_file"
       printf "%s\n" "$g_compile_out_full"
       printf "%s\n" "$g_compile_out_full" > "$g_log_file_unsanitized"
       copy_bin_files "$bin_path_unsanitized" "$bin_file" "$python_lib_unsanitized" "$staging_path_unsanitized"

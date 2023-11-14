@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_test.hpp"
+#include "pch_test.hpp"
 
 #include "libebm.h"
 #include "libebm_test.hpp"
@@ -63,6 +63,7 @@ TEST_CASE("Test Rehydration, boosting, binary") {
       },
       k_countInnerBagsDefault, 
       k_testCreateBoosterFlags_Default,
+      k_testComputeFlags_Default,
       nullptr, 
       0
    );
@@ -86,7 +87,8 @@ TEST_CASE("Test Rehydration, boosting, binary") {
          },
          k_countInnerBagsDefault,
          k_testCreateBoosterFlags_Default,
-         nullptr, 
+         k_testComputeFlags_Default,
+         nullptr,
          0
       );
 

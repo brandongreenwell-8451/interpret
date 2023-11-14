@@ -2,13 +2,13 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include "libebm.h" // EBM_API_BODY
 #include "logging.h" // LOG_
 #include "zones.h"
 
-#include "common_cpp.hpp"
+#include "common.hpp"
 
 #include "RandomDeterministic.hpp"
 #include "RandomNondeterministic.hpp"

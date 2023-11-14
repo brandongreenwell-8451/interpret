@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include <stddef.h> // size_t, ptrdiff_t
 #include <limits> // numeric_limits
@@ -10,9 +10,9 @@
 
 #include "libebm.h" // ErrorEbm
 #include "logging.h" // EBM_ASSERT
-#include "common_c.h" // FloatMain
-#include "zones.h"
+#include "unzoned.h" // FloatMain
 
+#include "zones.h"
 #include "Bin.hpp" // GetBinSize
 
 #include "ebm_internal.hpp" // k_cDimensionsMax

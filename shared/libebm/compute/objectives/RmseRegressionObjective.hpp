@@ -8,25 +8,27 @@
 
 template<typename TFloat>
 struct RmseRegressionObjective : RegressionObjective {
+   using TFloatInternal = TFloat;
    static constexpr bool k_bRmse = true;
+   static constexpr bool k_bApprox = false;
    static constexpr BoolEbm k_bMaximizeMetric = MINIMIZE_METRIC;
    static constexpr LinkEbm k_linkFunction = Link_identity;
    static constexpr OutputType k_outputType = GetOutputType(k_linkFunction);
    static constexpr int k_cItemsPerBitPackMax = 64;
    static constexpr int k_cItemsPerBitPackMin = 1;
    static ErrorEbm StaticApplyUpdate(const Objective * const pThis, ApplyUpdateBridge * const pData) {
-      return (static_cast<const RmseRegressionObjective<TFloat> *>(pThis))->ParentApplyUpdate<const RmseRegressionObjective<TFloat>, TFloat>(pData);
+      return (static_cast<const RmseRegressionObjective<TFloat> *>(pThis))->ParentApplyUpdate<const RmseRegressionObjective<TFloat>>(pData);
    }
-   template<typename T = void, typename std::enable_if<TFloat::k_bCpu, T>::type * = nullptr>
+   template<typename T = void, typename std::enable_if<ComputeFlags_Cpu == TFloat::k_zone, T>::type * = nullptr>
    static double StaticFinishMetric(const Objective * const pThis, const double metricSum) {
       return (static_cast<const RmseRegressionObjective<TFloat> *>(pThis))->FinishMetric(metricSum);
    }
-   template<typename T = void, typename std::enable_if<TFloat::k_bCpu, T>::type * = nullptr>
+   template<typename T = void, typename std::enable_if<ComputeFlags_Cpu == TFloat::k_zone, T>::type * = nullptr>
    static BoolEbm StaticCheckTargets(const Objective * const pThis, const size_t c, const void * const aTargets) {
-      return (static_cast<const RmseRegressionObjective<TFloat> *>(pThis))->ParentCheckTargets<const RmseRegressionObjective<TFloat>, TFloat>(c, aTargets);
+      return (static_cast<const RmseRegressionObjective<TFloat> *>(pThis))->ParentCheckTargets<const RmseRegressionObjective<TFloat>>(c, aTargets);
    }
-   void FillWrapper(const bool bCpuOnly, void * const pWrapperOut) noexcept {
-      FillObjectiveWrapper<RmseRegressionObjective, TFloat>(bCpuOnly, pWrapperOut);
+   void FillWrapper(const ComputeFlags zones, void * const pWrapperOut) noexcept {
+      FillObjectiveWrapper<RmseRegressionObjective>(zones, pWrapperOut);
    }
 
    inline RmseRegressionObjective(const Config & config) {
@@ -108,11 +110,12 @@ struct RmseRegressionObjective : RegressionObjective {
    }
 
 
-   template<size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, int cCompilerPack>
+   template<bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, int cCompilerPack>
    GPU_DEVICE NEVER_INLINE void InjectedApplyUpdate(ApplyUpdateBridge * const pData) const {
       static_assert(k_oneScore == cCompilerScores, "for RMSE regression there should always be one score");
       static_assert(!bHessian, "for RMSE regression we should never need the hessians");
       static_assert(bValidation || !bWeight, "bWeight can only be true if bValidation is true");
+      static_assert(!bDisableApprox, "Approximations cannot be disabled on RMSE since there are none on RMSE");
 
       static constexpr bool bCompilerZeroDimensional = k_cItemsPerBitPackNone == cCompilerPack;
 

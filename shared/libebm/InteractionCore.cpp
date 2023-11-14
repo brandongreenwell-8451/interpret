@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include <stdlib.h> // free
 #include <stddef.h> // size_t, ptrdiff_t
@@ -10,7 +10,7 @@
 
 #include "logging.h" // EBM_ASSERT
 
-#include "bridge_cpp.hpp" // GetCountScores
+#include "bridge.hpp" // GetCountScores
 #include "Bin.hpp" // IsOverflowBinSize
 
 #include "ebm_internal.hpp"
@@ -33,6 +33,7 @@ extern ErrorEbm Unbag(
 extern ErrorEbm GetObjective(
    const Config * const pConfig,
    const char * sObjective,
+   const ComputeFlags disableCompute,
    ObjectiveWrapper * const pCpuObjectiveWrapperOut,
    ObjectiveWrapper * const pSIMDObjectiveWrapperOut
 ) noexcept;
@@ -152,6 +153,7 @@ ErrorEbm InteractionCore::Create(
    const size_t cWeights,
    const BagEbm * const aBag,
    const CreateInteractionFlags flags,
+   const ComputeFlags disableCompute,
    const char * const sObjective,
    const double * const experimentalParams,
    InteractionCore ** const ppInteractionCoreOut
@@ -185,6 +187,8 @@ ErrorEbm InteractionCore::Create(
    }
    // give ownership of our object back to the caller, even if there is a failure
    *ppInteractionCoreOut = pInteractionCore;
+
+   pInteractionCore->m_bDisableApprox = 0 != (CreateInteractionFlags_DisableApprox & flags) ? EBM_TRUE : EBM_FALSE;
 
    size_t cBinsMax = 0;
 
@@ -272,8 +276,9 @@ ErrorEbm InteractionCore::Create(
       error = GetObjective(
          &config, 
          sObjective, 
+         disableCompute,
          &pInteractionCore->m_objectiveCpu, 
-         0 != (CreateInteractionFlags_DisableSIMD & flags) ? nullptr : &pInteractionCore->m_objectiveSIMD
+         &pInteractionCore->m_objectiveSIMD
       );
       if(Error_None != error) {
          // already logged
@@ -544,6 +549,7 @@ ErrorEbm InteractionCore::InitializeInteractionGradientsAndHessians(
             data.m_cScores = cScores;
             data.m_cPack = k_cItemsPerBitPackNone;
             data.m_bHessianNeeded = IsHessian() ? EBM_TRUE : EBM_FALSE;
+            data.m_bDisableApprox = IsDisableApprox();
             data.m_bValidation = EBM_FALSE;
             data.m_cSamples = pSubset->GetCountSamples();
             data.m_aPacked = nullptr;
@@ -629,6 +635,7 @@ ErrorEbm InteractionCore::InitializeInteractionGradientsAndHessians(
             data.m_cScores = 1;
             data.m_cPack = k_cItemsPerBitPackNone;
             data.m_bHessianNeeded = IsHessian() ? EBM_TRUE : EBM_FALSE;
+            data.m_bDisableApprox = IsDisableApprox();
             data.m_bValidation = EBM_FALSE;
             data.m_cSamples = pSubset->GetCountSamples();
             data.m_aPacked = nullptr;

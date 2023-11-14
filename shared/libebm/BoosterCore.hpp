@@ -11,9 +11,10 @@
 #include <atomic>
 
 #include "libebm.h" // ErrorEbm
-#include "common_c.h"
-#include "bridge_c.h" // ObjectiveWrapper
+#include "unzoned.h"
+
 #include "zones.h"
+#include "bridge.h" // ObjectiveWrapper
 
 #include "ebm_internal.hpp" // FloatMain
 #include "DataSetBoosting.hpp"
@@ -39,6 +40,7 @@ class BoosterCore final {
    std::atomic_size_t m_REFERENCE_COUNT;
 
    ptrdiff_t m_cClasses;
+   BoolEbm m_bDisableApprox;
 
    size_t m_cFeatures;
    FeatureBoosting * m_aFeatures;
@@ -79,6 +81,7 @@ class BoosterCore final {
    inline BoosterCore() noexcept :
       m_REFERENCE_COUNT(1), // we're not visible on any other thread yet, so no synchronization required
       m_cClasses(0),
+      m_bDisableApprox(EBM_FALSE),
       m_cFeatures(0),
       m_aFeatures(nullptr),
       m_cTerms(0),
@@ -176,6 +179,7 @@ public:
       const BagEbm * const aBag,
       const double * const aInitScores,
       const CreateBoosterFlags flags,
+      const ComputeFlags disableCompute,
       const char * const sObjective,
       BoosterCore ** const ppBoosterCoreOut
    );
@@ -187,15 +191,13 @@ public:
 
    inline double FinishMetric(const double metricSum) {
       EBM_ASSERT(nullptr != m_objectiveCpu.m_pObjective);
-      EBM_ASSERT(nullptr != m_objectiveCpu.m_pFinishMetricC);
-      return (*m_objectiveCpu.m_pFinishMetricC)(&m_objectiveCpu, metricSum);
+      return FinishMetricC(&m_objectiveCpu, metricSum);
    }
 
    inline BoolEbm CheckTargets(const size_t c, const void * const aTargets) const noexcept {
       EBM_ASSERT(nullptr != aTargets);
       EBM_ASSERT(nullptr != m_objectiveCpu.m_pObjective);
-      EBM_ASSERT(nullptr != m_objectiveCpu.m_pCheckTargetsC);
-      return (*m_objectiveCpu.m_pCheckTargetsC)(&m_objectiveCpu, c, aTargets);
+      return CheckTargetsC(&m_objectiveCpu, c, aTargets);
    }
 
    inline bool IsRmse() {
@@ -206,6 +208,10 @@ public:
    inline bool IsHessian() {
       EBM_ASSERT(nullptr != m_objectiveCpu.m_pObjective);
       return EBM_FALSE != m_objectiveCpu.m_bObjectiveHasHessian;
+   }
+
+   inline BoolEbm IsDisableApprox() const {
+      return m_bDisableApprox;
    }
 
    inline double LearningRateAdjustmentDifferentialPrivacy() const noexcept {

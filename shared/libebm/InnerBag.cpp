@@ -2,14 +2,14 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include <stdlib.h> // free
 #include <stddef.h> // size_t, ptrdiff_t
 #include <string.h> // memcpy
 
 #include "logging.h" // EBM_ASSERT
-#include "common_c.h" // AlignedFree
+#include "unzoned.h" // AlignedFree
 
 #include "ebm_internal.hpp"
 #include "InnerBag.hpp"

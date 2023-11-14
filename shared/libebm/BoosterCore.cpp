@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include <stdlib.h> // free
 #include <stddef.h> // size_t, ptrdiff_t
@@ -11,7 +11,7 @@
 
 #include "logging.h" // EBM_ASSERT
 
-#include "common_cpp.hpp" // IsConvertError, IsMultiplyError
+#include "common.hpp" // IsConvertError, IsMultiplyError
 #include "Bin.hpp" // IsOverflowBinSize
 
 #include "ebm_internal.hpp"
@@ -41,6 +41,7 @@ extern ErrorEbm Unbag(
 extern ErrorEbm GetObjective(
    const Config * const pConfig,
    const char * sObjective,
+   const ComputeFlags disableCompute,
    ObjectiveWrapper * const pCpuObjectiveWrapperOut,
    ObjectiveWrapper * const pSIMDObjectiveWrapperOut
 ) noexcept;
@@ -280,6 +281,7 @@ ErrorEbm BoosterCore::Create(
    const BagEbm * const aBag,
    const double * const aInitScores,
    const CreateBoosterFlags flags,
+   const ComputeFlags disableCompute,
    const char * const sObjective,
    BoosterCore ** const ppBoosterCoreOut
 ) {
@@ -331,6 +333,8 @@ ErrorEbm BoosterCore::Create(
    }
    // give ownership of our object back to the caller, even if there is a failure
    *ppBoosterCoreOut = pBoosterCore;
+
+   pBoosterCore->m_bDisableApprox = 0 != (CreateBoosterFlags_DisableApprox & flags) ? EBM_TRUE : EBM_FALSE;
 
    UIntShared countSamples;
    size_t cFeatures;
@@ -608,9 +612,10 @@ ErrorEbm BoosterCore::Create(
       config.isDifferentialPrivacy = 0 != (CreateBoosterFlags_DifferentialPrivacy & flags) ? EBM_TRUE : EBM_FALSE;
       error = GetObjective(
          &config,
-         sObjective,
+         sObjective, 
+         disableCompute,
          &pBoosterCore->m_objectiveCpu,
-         0 != (CreateBoosterFlags_DisableSIMD & flags) ? nullptr : &pBoosterCore->m_objectiveSIMD
+         &pBoosterCore->m_objectiveSIMD
       );
       if(Error_None != error) {
          // already logged
@@ -877,6 +882,7 @@ ErrorEbm BoosterCore::InitializeBoosterGradientsAndHessians(
          data.m_cScores = cScores;
          data.m_cPack = k_cItemsPerBitPackNone;
          data.m_bHessianNeeded = IsHessian() ? EBM_TRUE : EBM_FALSE;
+         data.m_bDisableApprox = IsDisableApprox();
          data.m_bValidation = EBM_FALSE;
          data.m_aMulticlassMidwayTemp = aMulticlassMidwayTemp;
          // if FloatScore is type FloatSmall then some of the zones might use FloatBig as their type and then read 

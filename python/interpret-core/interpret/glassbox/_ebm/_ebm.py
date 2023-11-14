@@ -3,9 +3,11 @@
 
 
 from typing import Optional, List, Tuple, Sequence, Dict, Mapping, Union
+from copy import deepcopy
 
 from itertools import count
 
+import os
 from ...utils._explanation import gen_perf_dicts
 from ._boost import boost
 from ._utils import (
@@ -19,6 +21,7 @@ from ._utils import (
     generate_term_names,
     generate_term_types,
 )
+from ...utils._misc import clean_index, clean_indexes
 from ...utils._histogram import make_all_histogram_edges
 from ...utils._link import inv_link
 from ...utils._seed import normalize_initial_seed
@@ -1214,11 +1217,11 @@ class EBMModel(BaseEstimator):
 
         return self
 
-    def _to_inner_jsonable(self, properties="all"):
+    def _to_json_inner(self, detail="all"):
         """Converts the inner model to a JSONable representation.
 
         Args:
-            properties: 'minimal', 'interpretable', 'mergeable', 'all'
+            detail: 'minimal', 'interpretable', 'mergeable', 'all'
 
         Returns:
             JSONable object
@@ -1226,16 +1229,16 @@ class EBMModel(BaseEstimator):
 
         check_is_fitted(self, "has_fitted_")
 
-        if properties == "minimal":
+        if detail == "minimal":
             level = 0
-        elif properties == "interpretable":
+        elif detail == "interpretable":
             level = 1
-        elif properties == "mergeable":
+        elif detail == "mergeable":
             level = 2
-        elif properties == "all":
+        elif detail == "all":
             level = 3
         else:
-            msg = f"Unrecognized export properties: {properties}"
+            msg = f"Unrecognized to_json detail: {detail}"
             _log.error(msg)
             raise ValueError(msg)
 
@@ -1329,6 +1332,9 @@ class EBMModel(BaseEstimator):
             if hasattr(self, "greediness"):
                 params["greediness"] = self.greediness
 
+            if hasattr(self, "smoothing_rounds"):
+                params["smoothing_rounds"] = self.smoothing_rounds
+
             if hasattr(self, "max_rounds"):
                 params["max_rounds"] = self.max_rounds
 
@@ -1343,6 +1349,9 @@ class EBMModel(BaseEstimator):
 
             if hasattr(self, "max_leaves"):
                 params["max_leaves"] = self.max_leaves
+
+            if hasattr(self, "objective"):
+                params["objective"] = self.objective
 
             if hasattr(self, "n_jobs"):
                 params["n_jobs"] = self.n_jobs
@@ -1458,11 +1467,11 @@ class EBMModel(BaseEstimator):
 
         return j
 
-    def _to_outer_jsonable(self, properties="all"):
+    def _to_json_outer(self, detail="all"):
         """Converts the outer model to a JSONable representation.
 
         Args:
-            properties: 'minimal', 'interpretable', 'mergeable', 'all'
+            detail: 'minimal', 'interpretable', 'mergeable', 'all'
 
         Returns:
             JSONable object
@@ -1515,7 +1524,7 @@ class EBMModel(BaseEstimator):
         #   and "edits", which would contain a list of the edits.  These fields wouldn't be present in a scikit-learn
         #   generated EBM, but would appear if the user edited the EBM, or if they loaded one that had edits.
 
-        inner = self._to_inner_jsonable(properties)
+        inner = self._to_json_inner(detail)
 
         outer = {}
         outer["version"] = "1.0"
@@ -1523,18 +1532,42 @@ class EBMModel(BaseEstimator):
 
         return outer
 
-    def _to_json(self, properties="all"):
-        """Converts the model to a JSON representation.
+    def to_json(self, file=None, indent=2, detail="all"):
+        """Exports the model to a JSON representation.
 
         Args:
-            properties: 'minimal', 'interpretable', 'mergeable', 'all'
+            file: None to return a JSONable object, a path-like object (str or os.PathLike)
+                to write a file, or a file-like object implementing .write().
+            indent: If indent is a non-negative integer or string, then JSON array
+                elements and object members will be pretty-printed with that indent
+                level. An indent level of 0, negative, or "" will only insert newlines.
+                None (the default) selects the most compact representation. Using a
+                positive integer indent indents that many spaces per level. If indent
+                is a string (such as "\t"), that string is used to indent each level.
+            detail: 'minimal', 'interpretable', 'mergeable', 'all'
 
         Returns:
-            JSON string
+            JSONable object if file=None, otherwise returns None.
         """
 
-        outer = self._to_outer_jsonable(properties)
-        return json.dumps(outer, allow_nan=False, indent=2)
+        check_is_fitted(self, "has_fitted_")
+
+        warn(
+            "The function to_json is in beta. The JSON format may change in a future version."
+        )
+
+        if file is None:
+            # return JSONable object
+            return self._to_json_outer(detail)
+        elif isinstance(file, (str, os.PathLike)):
+            # file is a path-like object (str or os.PathLike)
+            with open(file, "w") as fp:
+                outer = self._to_json_outer(detail)
+                json.dump(outer, fp, allow_nan=False, indent=indent)
+        else:
+            # file is a file-like object implementing .write()
+            outer = self._to_json_outer(detail)
+            json.dump(outer, file, allow_nan=False, indent=indent)
 
     def decision_function(self, X, init_score=None):
         """Predict scores from model before calling the link function.
@@ -2046,6 +2079,17 @@ class EBMModel(BaseEstimator):
         else:
             raise ValueError(f"Unrecognized importance_type: {importance_type}")
 
+    def copy(self):
+        """Makes a deepcopy of the EBM.
+
+        Args:
+
+        Returns:
+            The new copy.
+        """
+
+        return deepcopy(self)
+
     def monotonize(self, term, increasing="auto", passthrough=0.0):
         """Adjusts a term to be monotone using isotonic regression. An important consideration
         is that this function only adjusts a single term and will not modify pairwise terms.
@@ -2058,7 +2102,7 @@ class EBMModel(BaseEstimator):
             passthrough: the process of monotonization can result in a change to the mean response
                 of the model. If passthrough is set to 0.0 then the model's mean response to the
                 training set will not change. If passthrough is set to 1.0 then any change to the
-                mean response made by monotonization will be passed through to self.intercept_.
+                mean response made by monotonization will be passed through to self.intercept\_.
                 Values between 0 and 1 will result in that percentage being passed through.
 
         Returns:
@@ -2072,8 +2116,13 @@ class EBMModel(BaseEstimator):
             _log.error(msg)
             raise ValueError(msg)
 
-        if isinstance(term, str):
-            term = self.term_names_.index(term)
+        term = clean_index(
+            term,
+            len(self.term_features_),
+            getattr(self, "term_names_", None),
+            "term",
+            "self.term_names_",
+        )
 
         features = self.term_features_[term]
         if 2 <= len(features):
@@ -2098,12 +2147,8 @@ class EBMModel(BaseEstimator):
             _log.error(msg)
             raise ValueError(msg)
 
-        # copy any fields we overwrite in case someone has a shalow copy of self
-        term_scores = self.term_scores_.copy()
-        scores = term_scores[term].copy()
-
         # the missing and unknown bins are not part of the continuous range
-        y = scores[1:-1]
+        y = self.term_scores_[term][1:-1]
         x = np.arange(len(y), dtype=np.int64)
 
         all_weights = self.bin_weights_[term]
@@ -2120,28 +2165,19 @@ class EBMModel(BaseEstimator):
         change = (original_mean - result_mean) * (1.0 - passthrough)
         y += change
 
-        scores[1:-1] = y
+        self.term_scores_[term][1:-1] = y
 
         if 0.0 < passthrough:
-            mean = np.average(scores, weights=all_weights)
-            scores -= mean
+            mean = np.average(self.term_scores_[term], weights=all_weights)
+            self.term_scores_[term] -= mean
             self.intercept_ += mean
-
-        term_scores[term] = scores
-        self.term_scores_ = term_scores
-
-        bagged_scores = self.bagged_scores_.copy()
-        standard_deviations = self.standard_deviations_.copy()
 
         # TODO: in the future we can apply monotonize to the individual outer bags in bagged_scores_
         #       and then re-compute standard_deviations_ and term_scores_ from the monotonized bagged scores.
         #       but first we need to do some testing to figure out if this gives a worse result than applying
         #       IsotonicRegression to the final model which should be more regularized
-        bagged_scores[term] = None
-        standard_deviations[term] = None
-
-        self.bagged_scores_ = bagged_scores
-        self.standard_deviations_ = standard_deviations
+        self.bagged_scores_[term] = None
+        self.standard_deviations_[term] = None
 
         return self
 
@@ -2153,7 +2189,7 @@ class EBMModel(BaseEstimator):
         ``standard_deviations_``, and ``bin_weights_``.
 
         Args:
-            terms: A list (or other enumerable object) of term names or indices.
+            terms: A list (or other enumerable object) of term names or indices or booleans.
 
         Returns:
             Itself.
@@ -2161,10 +2197,13 @@ class EBMModel(BaseEstimator):
         check_is_fitted(self, "has_fitted_")
 
         # If terms contains term names, convert them to indices
-        terms = [
-            self.term_names_.index(term) if isinstance(term, str) else term
-            for term in terms
-        ]
+        terms = clean_indexes(
+            terms,
+            len(self.term_features_),
+            getattr(self, "term_names_", None),
+            "terms",
+            "self.term_names_",
+        )
 
         def _remove_indices(x, idx):
             # Remove elements of a list based on provided index
@@ -2187,8 +2226,111 @@ class EBMModel(BaseEstimator):
 
         return self
 
-    def scale_terms(self, factors, remove_nil_terms=False):
-        """Scale the individual term contributions by a constant factor. For
+    def remove_features(self, features):
+        """Removes features (and their associated components) from a fitted EBM. Note
+        that this will change the structure (i.e., by removing the specified
+        indices) of the following components of ``self``: ``histogram_edges_``,
+        ``histogram_weights_``, ``unique_val_counts_``, ``bins_``,
+        ``feature_names_in_``, ``feature_types_in_``, and ``feature_bounds_``.
+        Also, any terms that use the features being deleted will be deleted.
+        The following attributes that the caller passed to the \_\_init\_\_ function are
+        not modified: ``feature_names``, and ``feature_types``.
+
+        Args:
+            features: A list or enumerable of feature names or indices or
+                booleans indicating which features to remove.
+
+        Returns:
+            Itself.
+        """
+
+        check_is_fitted(self, "has_fitted_")
+
+        drop_features = clean_indexes(
+            features,
+            len(self.bins_),
+            getattr(self, "feature_names_in_", None),
+            "features",
+            "self.feature_names_in_",
+        )
+
+        drop_terms = [
+            term_idx
+            for term_idx, feature_idxs in enumerate(self.term_features_)
+            if any(feature_idx in drop_features for feature_idx in feature_idxs)
+        ]
+        self.remove_terms(drop_terms)
+
+        self.histogram_edges_ = [
+            v for i, v in enumerate(self.histogram_edges_) if i not in drop_features
+        ]
+        self.histogram_weights_ = [
+            v for i, v in enumerate(self.histogram_weights_) if i not in drop_features
+        ]
+        self.bins_ = [v for i, v in enumerate(self.bins_) if i not in drop_features]
+        self.feature_names_in_ = [
+            v for i, v in enumerate(self.feature_names_in_) if i not in drop_features
+        ]
+        self.feature_types_in_ = [
+            v for i, v in enumerate(self.feature_types_in_) if i not in drop_features
+        ]
+
+        drop_features = list(drop_features)
+        self.unique_val_counts_ = np.delete(self.unique_val_counts_, drop_features)
+        self.feature_bounds_ = np.delete(self.feature_bounds_, drop_features, axis=0)
+
+        self.n_features_in_ = len(self.bins_)
+
+        return self
+
+    def sweep(self, terms=True, bins=True, features=False):
+        """Purges unused elements from a fitted EBM.
+
+        Args:
+            terms: Boolean indicating if zeroed terms that do not affect the output
+                should be purged from the model.
+            bins: Boolean indicating if unused bin levels that do not affect the output
+                should be purged from the model.
+            features: Boolean indicating if features that are not used in any terms
+                and therefore do not affect the output should be purged from the model.
+
+        Returns:
+            Itself.
+        """
+
+        check_is_fitted(self, "has_fitted_")
+
+        if terms is True:
+            terms = [
+                i for i, v in enumerate(self.term_scores_) if np.count_nonzero(v) == 0
+            ]
+            self.remove_terms(terms)
+        elif terms is not False:
+            msg = "terms must be True or False"
+            _log.error(msg)
+            raise ValueError(msg)
+
+        if bins is True:
+            remove_unused_higher_bins(self.term_features_, self.bins_)
+            deduplicate_bins(self.bins_)
+        elif bins is not False:
+            msg = "bins must be True or False"
+            _log.error(msg)
+            raise ValueError(msg)
+
+        if features is True:
+            features = np.ones(len(self.bins_), np.bool_)
+            for term in self.term_features_:
+                for feature_idx in term:
+                    features.itemset(feature_idx, False)
+            self.remove_features(features)
+        elif features is not False:
+            msg = "features must be True or False"
+            _log.error(msg)
+            raise ValueError(msg)
+
+    def scale(self, term, factor):
+        """Scale the individual term contribution by a constant factor. For
         example, you can nullify the contribution of specific terms by setting
         their corresponding weights to zero; this would cause the associated
         global explanations (e.g., variable importance) to also be zero. A
@@ -2199,64 +2341,28 @@ class EBMModel(BaseEstimator):
         importance scores, standard deviations, etc.).
 
         Args:
-            factors: A list of weights/factors (one for each term in the model).
-                This should be a list or numpy vector (i.e., 1-d array) of
-                floats whose i-th element corresponds to the i-th element of the
-                ``.term_*_`` attributes (e.g., ``.term_names_``).
-            remove_nil_terms: Boolean indicating whether or not to automatically
-                remove all terms that are given a weight of zero; terms with a
-                weight of zero provide zero contribution to the fit.
+            term: term index or name of the term to be scaled.
+            factor: The amount to scale the term by.
 
         Returns:
             Itself.
         """
+
         check_is_fitted(self, "has_fitted_")
 
-        if len(factors) != len(self.term_names_):
-            msg = "need to supply one weight for each term"
-            _log.error(msg)
-            raise ValueError(msg)
+        term = clean_index(
+            term,
+            len(self.term_features_),
+            getattr(self, "term_names_", None),
+            "term",
+            "self.term_names_",
+        )
 
-        if isinstance(factors, list):
-            factors = np.array(factors)
+        self.term_scores_[term] *= factor
+        self.bagged_scores_[term] *= factor
+        self.standard_deviations_[term] *= factor
 
-        # Copy any fields we'll overwrite in case someone has a shallow copy of self
-        term_scores = self.term_scores_.copy()
-        bagged_scores = self.bagged_scores_.copy()
-        standard_deviations = self.standard_deviations_.copy()
-
-        for idw, w in enumerate(factors):
-            scores = term_scores[idw].copy()
-            bscores = bagged_scores[idw].copy()
-            stdevs = standard_deviations[idw].copy()
-            y = scores
-            y_bagged = bscores
-            y_sd = stdevs
-
-            # Reweight relevant components by scalar multiple given by weight
-            y *= w
-            y_bagged *= w
-            y_sd *= w
-
-            scores = y
-            bscores = y_bagged
-            stdevs = y_sd
-            term_scores[idw] = scores
-            bagged_scores[idw] = bscores
-            standard_deviations[idw] = stdevs
-
-        # Update components of self
-        self.term_scores_ = term_scores
-        self.bagged_scores_ = bagged_scores
-        self.standard_deviations_ = standard_deviations
-
-        # Delete "nil" terms (i.e., terms providing zero contribution to the fit)
-        if remove_nil_terms:  # should automatically catch zero weight terms
-            # Delete components that have a weight of zero
-            terms = np.where(factors == 0)[0].tolist()
-            return self.remove_terms(terms)
-        else:
-            return self
+        return self
 
 
 class ExplainableBoostingClassifier(EBMModel, ClassifierMixin, ExplainerMixin):

@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_test.hpp"
+#include "pch_test.hpp"
 
 // we roll our own test framework here since it's nice having no dependencies, and we just need a few simple tests for the C API.
 // If we ended up needing something more substantial, I'd consider using doctest ( https://github.com/onqtam/doctest ) because:
@@ -228,6 +228,7 @@ TestBoost::TestBoost(
    const std::vector<TestSample> validation,
    const IntEbm countInnerBags,
    const CreateBoosterFlags flags,
+   const ComputeFlags disableCompute,
    const char * const sObjective,
    const ptrdiff_t iZeroClassificationLogit
 ) :
@@ -543,6 +544,7 @@ TestBoost::TestBoost(
       0 == allFeatureIndexes.size() ? nullptr : &allFeatureIndexes[0],
       countInnerBags,
       flags,
+      disableCompute,
       nullptr == sObjective ? (IsClassification(cClasses) ? "log_loss" : "rmse") : sObjective,
       nullptr,
       &m_boosterHandle
@@ -683,6 +685,7 @@ TestInteraction::TestInteraction(
    const std::vector<FeatureTest> features,
    const std::vector<TestSample> samples,
    const CreateInteractionFlags flags,
+   const ComputeFlags disableCompute,
    const char * const sObjective,
    const ptrdiff_t iZeroClassificationLogit
 ) :
@@ -898,6 +901,7 @@ TestInteraction::TestInteraction(
       0 == bag.size() ? nullptr : &bag[0],
       0 == initScores.size() ? nullptr : &initScores[0],
       flags,
+      disableCompute,
       nullptr == sObjective ? (IsClassification(cClasses) ? "log_loss" : "rmse") : sObjective,
       nullptr,
       &m_interactionHandle
@@ -990,7 +994,7 @@ extern void DisplayCuts(
    std::cout << std::endl << std::endl;
 }
 
-extern "C" void TestCHeaderConstructs();
+EBM_EXTERN_C void TestCHeaderConstructs();
 
 int main() {
 #ifdef _MSC_VER

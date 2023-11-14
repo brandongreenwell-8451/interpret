@@ -32,6 +32,7 @@ class InteractionCore final {
    std::atomic_size_t m_REFERENCE_COUNT;
 
    ptrdiff_t m_cClasses;
+   BoolEbm m_bDisableApprox;
 
    size_t m_cFeatures;
    FeatureInteraction * m_aFeatures;
@@ -53,6 +54,7 @@ class InteractionCore final {
    inline InteractionCore() noexcept :
       m_REFERENCE_COUNT(1), // we're not visible on any other thread yet, so no synchronization required
       m_cClasses(0),
+      m_bDisableApprox(EBM_FALSE),
       m_cFeatures(0),
       m_aFeatures(nullptr)
    {
@@ -97,6 +99,7 @@ public:
       const size_t cWeights,
       const BagEbm * const aBag,
       const CreateInteractionFlags flags,
+      const ComputeFlags disableCompute,
       const char * const sObjective,
       const double * const experimentalParams,
       InteractionCore ** const ppInteractionCoreOut
@@ -112,8 +115,7 @@ public:
    inline BoolEbm CheckTargets(const size_t c, const void * const aTargets) const noexcept {
       EBM_ASSERT(nullptr != aTargets);
       EBM_ASSERT(nullptr != m_objectiveCpu.m_pObjective);
-      EBM_ASSERT(nullptr != m_objectiveCpu.m_pCheckTargetsC);
-      return (*m_objectiveCpu.m_pCheckTargetsC)(&m_objectiveCpu, c, aTargets);
+      return CheckTargetsC(&m_objectiveCpu, c, aTargets);
    }
 
    inline bool IsRmse() {
@@ -124,6 +126,10 @@ public:
    inline bool IsHessian() {
       EBM_ASSERT(nullptr != m_objectiveCpu.m_pObjective);
       return EBM_FALSE != m_objectiveCpu.m_bObjectiveHasHessian;
+   }
+
+   inline BoolEbm IsDisableApprox() const {
+      return m_bDisableApprox;
    }
 
    inline double GainAdjustmentGradientBoosting() const noexcept {

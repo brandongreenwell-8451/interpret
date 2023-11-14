@@ -5,24 +5,24 @@
   AND they should include their associated hpp file first and then all other include files in order below
 
 // anywhere
-#include "libebm.h" // PUBLIC. Cannot have dependencies on our other private include files
-#include "logging.h" // ONLY depends on libebm.h. Designed to be included everywhere else
-#include "common_c.h" // Currently has no dependencies, but could someday depend on libebm.h and logging.h. Designed to be included everywhere except logging.h with signatures for shared extern functions
-#include "bridge_c.h" // Currently only depends on libebm.h, but could see dependencies on logging.h, common_c.h in the future
+#include "libebm.h" // PUBLIC. Cannot have dependencies on any private files
+#include "logging.h" // depends on libebm.h ONLY. Designed to be included everywhere else
+#include "unzoned.h" // depends on libebm.h and logging.h
 
 // zone control
-#include "zones.h" // no dependencies, but there is no reason to include it above any hpp files
+#include "zones.h" // defines zone definition bits that we use in the bridge
 
-// common and bridge that depend on zoning
-#include "common_cpp.hpp" // depends only on zones.h, but could someday also depend on libebm.h, logging.h, common_c.h
-#include "bridge_cpp.hpp" // depends on libebm.h (via bridge_c.h), bridge_c.h, zones.h, common_cpp.hpp.  Could someday depend on logging.h, common_c.h
+#include "bridge.h" // depends on libebm.h, logging.h, unzoned.h, zones.h
+
+// bridge files that depend on zoning
+#include "common.hpp"
+#include "bridge.hpp"
 #include "GradientPair.hpp"
 #include "Bin.hpp" // depends on GradientPair.hpp
 
 // everything below here more or less depends on all the above includes
 
 // compute side include files
-#include "zoned_bridge_c_functions.h" // ONLY depends on libebm.h, bridge_c.h, zones.h
 #include "zoned_bridge_cpp_functions.hpp" // depends on libebm.h, zones.h    circular pointer to Objective.hpp.  pointers to structs in bridge_c.h
 #include "compute.hpp" // GENERAL include file in the compute zones.  Depends on zones.h, and bridge_cpp.hpp, and indirectly through bridge_cpp.hpp depends on libebm.h, bridge_c.h, common_cpp.hpp
 #include "approximate_math.hpp"

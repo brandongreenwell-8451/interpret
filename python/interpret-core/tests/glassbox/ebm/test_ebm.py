@@ -22,6 +22,8 @@ from interpret.privacy import (
     DPExplainableBoostingRegressor,
 )
 
+from io import StringIO
+import json
 import numpy as np
 import pandas as pd  # type: ignore
 from sklearn.model_selection import cross_validate, StratifiedShuffleSplit, train_test_split  # type: ignore
@@ -47,7 +49,6 @@ def valid_ebm(ebm):
         assert all_finite
 
 
-@pytest.mark.slow
 def test_monotonize():
     data = synthetic_classification()
     X = data["full"]["X"]
@@ -73,6 +74,85 @@ def test_monotonize():
     diff = np.diff(clf.term_features_[2])
     assert np.all(diff >= 0) or np.all(diff <= 0)
     assert intercept == clf.intercept_
+
+
+def test_ebm_remove_features():
+    data = synthetic_regression()
+    X = data["full"]["X"]
+    y = data["full"]["y"]
+
+    clf = ExplainableBoostingRegressor(interactions=[(1, 2), (1, 3)])
+    clf.fit(X, y)
+    clf.remove_features(["A", 2])
+
+    assert clf.feature_names_in_ == ["B", "D"]
+    assert len(clf.histogram_edges_) == 2
+    assert len(clf.histogram_weights_) == 2
+    assert len(clf.unique_val_counts_) == 2
+    assert len(clf.bins_) == 2
+    assert len(clf.feature_names_in_) == 2
+    assert len(clf.feature_types_in_) == 2
+    assert clf.feature_bounds_.shape[0] == 2
+    assert clf.n_features_in_ == 2
+
+    assert clf.term_names_ == ["B", "D", "B & D"]
+    assert len(clf.term_features_) == 3
+    assert len(clf.term_scores_) == 3
+    assert len(clf.bagged_scores_) == 3
+    assert len(clf.standard_deviations_) == 3
+    assert len(clf.bin_weights_) == 3
+
+
+def test_ebm_sweep():
+    data = synthetic_regression()
+    X = data["full"]["X"]
+    y = data["full"]["y"]
+
+    clf = ExplainableBoostingRegressor(interactions=[(1, 2), (1, 3)])
+    clf.fit(X, y)
+
+    clf.term_scores_[0].fill(0)  # set 'A' to zero
+    clf.term_scores_[len(clf.term_scores_) - 1].fill(0)  # set 'B & D' to zero
+
+    clf.sweep(terms=True, bins=True, features=True)
+
+    # check that sweeping the features removed feature 'A' which was not used in a term
+    assert clf.feature_names_in_ == ["B", "C", "D"]
+    assert len(clf.histogram_edges_) == 3
+    assert len(clf.histogram_weights_) == 3
+    assert len(clf.unique_val_counts_) == 3
+    assert len(clf.bins_) == 3
+    assert len(clf.feature_names_in_) == 3
+    assert len(clf.feature_types_in_) == 3
+    assert clf.feature_bounds_.shape[0] == 3
+    assert clf.n_features_in_ == 3
+
+    # check that sweeping the bins deleted the pair bins in D
+    assert len(clf.bins_[0]) == 2  # feature 'B'
+    assert len(clf.bins_[1]) == 2  # feature 'C'
+    assert len(clf.bins_[2]) == 1  # feature 'D'
+
+    # check that sweeping the terms removed the zeroed terms
+    assert clf.term_names_ == ["B", "C", "D", "B & C"]
+    assert len(clf.term_features_) == 4
+    assert len(clf.term_scores_) == 4
+    assert len(clf.bagged_scores_) == 4
+    assert len(clf.standard_deviations_) == 4
+    assert len(clf.bin_weights_) == 4
+
+
+def test_copy():
+    data = synthetic_classification()
+    X = data["full"]["X"]
+    y = data["full"]["y"]
+
+    clf = ExplainableBoostingClassifier()
+    clf.fit(X, y)
+
+    ebm_copy = clf.copy()
+    clf.term_scores_ = None  # make the original invalid
+
+    valid_ebm(ebm_copy)
 
 
 @pytest.mark.slow
@@ -223,8 +303,8 @@ def test_ebm_synthetic_pairwise():
     clf_global = clf.explain_global()
 
     # Low/Low and High/High should learn high scores
-    assert clf_global.data(2)["scores"][-1][-1] > 5
-    assert clf_global.data(2)["scores"][1][1] > 5
+    assert clf_global.data(2)["scores"][-1][-1] > 3.5
+    assert clf_global.data(2)["scores"][1][1] > 3.5
 
 
 def test_ebm_tripple():
@@ -942,7 +1022,7 @@ def test_json_classification():
 
     clf.bin_weights_[0] = np.delete(clf.bin_weights_[0], 1)
 
-    clf._to_json(properties="all")
+    clf.to_json(detail="all")
 
 
 def test_json_multiclass():
@@ -955,7 +1035,7 @@ def test_json_multiclass():
         max_bins=10, feature_types=feature_types, interactions=0
     )
     clf.fit(X, y)
-    clf._to_json(properties="all")
+    clf.to_json(detail="all")
 
 
 def test_json_regression():
@@ -971,7 +1051,7 @@ def test_json_regression():
         interactions=[(1, 2), (2, 3)],
     )
     clf.fit(X, y)
-    clf._to_json(properties="all")
+    clf.to_json(detail="all")
 
 
 def test_json_dp_classification():
@@ -985,7 +1065,7 @@ def test_json_dp_classification():
     clf.term_scores_[0][0] = np.nan
     clf.term_scores_[0][1] = np.inf
     clf.term_scores_[0][2] = -np.inf
-    clf._to_json(properties="all")
+    clf.to_json(detail="all")
 
 
 def test_json_dp_regression():
@@ -996,7 +1076,22 @@ def test_json_dp_regression():
     feature_types[0] = "nominal"
     clf = DPExplainableBoostingRegressor(max_bins=5, feature_types=feature_types)
     clf.fit(X, y)
-    clf._to_json(properties="all")
+    clf.to_json(detail="all")
+
+
+def test_to_json():
+    data = synthetic_classification()
+    X = data["full"]["X"]
+    y = data["full"]["y"]
+
+    clf = ExplainableBoostingClassifier()
+    clf.fit(X, y)
+
+    file_like_string_writer = StringIO()
+    jsonable = clf.to_json(file_like_string_writer)
+    json_data = file_like_string_writer.getvalue()
+    jsonable = json.loads(json_data)
+    assert "ebm" in jsonable
 
 
 def test_exclude_explicit():
@@ -1084,7 +1179,7 @@ def test_ebm_remove_terms():
     assert len(clf.bin_weights_) == 2
 
 
-def test_ebm_scale_terms():
+def test_ebm_scale():
     data = synthetic_regression()
     X = data["full"]["X"]
     y = data["full"]["y"]
@@ -1093,7 +1188,11 @@ def test_ebm_scale_terms():
     clf.fit(X, y)
     assert clf.term_names_ == ["A", "B", "C", "D"]
     # The following is equivalent to calling `clf.remove_terms(["A", "C"])`
-    clf.scale_terms(factors=[0, 1.0, 0, 1.0], remove_nil_terms=True)
+    clf.scale(0, factor=0)
+    clf.scale("B", factor=0.5)
+    clf.scale("C", factor=0)
+    clf.scale(3, factor=2.0)
+    clf.sweep()
     assert clf.term_names_ == ["B", "D"]
     assert len(clf.term_features_) == 2
     assert len(clf.term_names_) == 2

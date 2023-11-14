@@ -2,13 +2,13 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include <stdlib.h> // free
 #include <stddef.h> // size_t, ptrdiff_t
 
-#include "common_cpp.hpp"
-#include "bridge_cpp.hpp"
+#include "common.hpp"
+#include "bridge.hpp"
 
 #include "dataset_shared.hpp" // GetDataSetSharedHeader
 #include "InteractionCore.hpp"
@@ -124,6 +124,7 @@ EBM_API_BODY ErrorEbm EBM_CALLING_CONVENTION CreateInteractionDetector(
    const BagEbm * bag,
    const double * initScores, // only samples with non-zeros in the bag are included
    CreateInteractionFlags flags,
+   ComputeFlags disableCompute,
    const char * objective,
    const double * experimentalParams,
    InteractionHandle * interactionHandleOut
@@ -133,6 +134,7 @@ EBM_API_BODY ErrorEbm EBM_CALLING_CONVENTION CreateInteractionDetector(
       "bag=%p, "
       "initScores=%p, "
       "flags=0x%" UCreateInteractionFlagsPrintf ", "
+      "disableCompute=0x%" UComputeFlagsPrintf ", "
       "objective=%p, "
       "experimentalParams=%p, "
       "interactionHandleOut=%p"
@@ -141,6 +143,7 @@ EBM_API_BODY ErrorEbm EBM_CALLING_CONVENTION CreateInteractionDetector(
       static_cast<const void *>(bag),
       static_cast<const void *>(initScores),
       static_cast<UCreateInteractionFlags>(flags), // signed to unsigned conversion is defined behavior in C++
+      static_cast<UComputeFlags>(disableCompute), // signed to unsigned conversion is defined behavior in C++
       static_cast<const void *>(objective), // do not print the string for security reasons
       static_cast<const void *>(experimentalParams),
       static_cast<const void *>(interactionHandleOut)
@@ -155,7 +158,8 @@ EBM_API_BODY ErrorEbm EBM_CALLING_CONVENTION CreateInteractionDetector(
    *interactionHandleOut = nullptr; // set this to nullptr as soon as possible so the caller doesn't attempt to free it
 
    if(0 != (static_cast<UCreateInteractionFlags>(flags) & static_cast<UCreateInteractionFlags>(~(
-      static_cast<UCreateInteractionFlags>(CreateInteractionFlags_DifferentialPrivacy)
+      static_cast<UCreateInteractionFlags>(CreateInteractionFlags_DifferentialPrivacy) |
+      static_cast<UCreateInteractionFlags>(CreateInteractionFlags_DisableApprox)
    )))) {
       LOG_0(Trace_Error, "ERROR CreateInteractionDetector flags contains unknown flags. Ignoring extras.");
    }
@@ -198,6 +202,7 @@ EBM_API_BODY ErrorEbm EBM_CALLING_CONVENTION CreateInteractionDetector(
       cWeights,
       bag,
       flags,
+      disableCompute,
       objective,
       experimentalParams,
       &pInteractionCore

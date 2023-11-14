@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#include "pch.hpp"
 
 #include <stddef.h> // size_t, ptrdiff_t
 
@@ -10,7 +10,7 @@
 #include "logging.h"
 #include "zones.h"
 
-#include "common_cpp.hpp" // IsMultiplyError
+#include "common.hpp" // IsMultiplyError
 #include "GradientPair.hpp"
 #include "Bin.hpp"
 

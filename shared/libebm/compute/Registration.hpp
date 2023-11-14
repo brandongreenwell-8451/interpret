@@ -12,11 +12,11 @@
 
 #include "libebm.h"
 #include "logging.h" // EBM_ASSERT
-#include "common_c.h" // INLINE_ALWAYS
-#include "bridge_c.h" // Config
-#include "zones.h"
+#include "unzoned.h" // INLINE_ALWAYS
 
-#include "bridge_cpp.hpp"
+#include "zones.h"
+#include "bridge.h" // Config
+#include "bridge.hpp"
 
 #include "registration_exceptions.hpp"
 
@@ -33,7 +33,11 @@ class ParamBase {
 
 protected:
 
-   ParamBase(const char * const sParamName);
+   INLINE_ALWAYS ParamBase(const char * const sParamName) : m_sParamName(sParamName) {
+      if(EBM_FALSE != CheckForIllegalCharacters(sParamName)) {
+         throw IllegalParamNameException();
+      }
+   }
 
 public:
 
@@ -83,8 +87,6 @@ public:
 };
 
 class Registration {
-   const char * const m_sRegistrationName;
-
    // these ConvertStringToRegistrationType functions are here to de-template the various Param types
 
    INLINE_ALWAYS static const char * ConvertStringToRegistrationType(
@@ -105,9 +107,26 @@ class Registration {
    }
 
 protected:
-   const bool m_bCpuOnly;
+   const bool m_zones;
+   const char * const m_sRegistrationName;
 
-   static void CheckParamNames(const char * const sParamName, std::vector<const char *> usedParamNames);
+   static void CheckParamNames(const char * const sParamName, std::vector<const char *> usedParamNames) {
+      EBM_ASSERT(nullptr != sParamName);
+
+      // yes, this is exponential, but it's only exponential for parameters that we define in this executable so
+      // we have complete control, and objective/metric params should not exceed a handfull
+      for(const char * const sOtherParamName : usedParamNames) {
+         EBM_ASSERT(nullptr != sOtherParamName);
+
+         const char * const sParamNameEnd = IsStringEqualsCaseInsensitive(sParamName, sOtherParamName);
+         if(nullptr != sParamNameEnd) {
+            if('\0' == *sParamNameEnd) {
+               throw DuplicateParamNameException();
+            }
+         }
+      }
+      usedParamNames.push_back(sParamName);
+   }
 
    template<typename TParam>
    static typename TParam::ParamType UnpackParam(
@@ -164,8 +183,13 @@ protected:
       const char * sRegistration, 
       const char * const sRegistrationEnd,
       const size_t cUsedParams
-   );
-   const char * CheckRegistrationName(const char * sRegistration, const char * const sRegistrationEnd) const;
+   ) {
+      if(cUsedParams != CountParams(sRegistration, sRegistrationEnd)) {
+         // our counts don't match up, so there are strings in the sRegistration string that we didn't
+         // process as params.
+         throw ParamUnknownException();
+      }
+   }
 
    virtual bool AttemptCreate(
       const Config * const pConfig,
@@ -174,13 +198,16 @@ protected:
       void * const pWrapperOut
    ) const = 0;
 
-   Registration(const bool bCpuOnly, const char * const sRegistrationName);
+   INLINE_ALWAYS Registration(const ComputeFlags zones, const char * const sRegistrationName) :
+      m_zones(zones),
+      m_sRegistrationName(sRegistrationName)
+   {
+      if(EBM_FALSE != CheckForIllegalCharacters(sRegistrationName)) {
+         throw IllegalRegistrationNameException();
+      }
+   }
 
 public:
-
-   static constexpr const char k_paramSeparator = ';';
-   static constexpr char k_valueSeparator = '=';
-   static constexpr char k_typeTerminator = ':';
 
    static bool CreateRegistrable(
       const Config * const pConfig,
@@ -188,17 +215,41 @@ public:
       const char * sRegistrationEnd,
       void * const pWrapperOut,
       const std::vector<std::shared_ptr<const Registration>> & registrations
-   );
+   ) {
+      EBM_ASSERT(nullptr != pConfig);
+      EBM_ASSERT(nullptr != sRegistration);
+      EBM_ASSERT(nullptr != sRegistrationEnd);
+      EBM_ASSERT(sRegistration < sRegistrationEnd); // empty string not allowed
+      EBM_ASSERT('\0' != *sRegistration);
+      EBM_ASSERT(!(0x20 == *sRegistration || (0x9 <= *sRegistration && *sRegistration <= 0xd)));
+      EBM_ASSERT('\0' == *sRegistrationEnd || k_registrationSeparator == *sRegistrationEnd);
+      EBM_ASSERT(nullptr != pWrapperOut);
+
+      LOG_0(Trace_Info, "Entered Registrable::CreateRegistrable");
+
+      bool bNoMatch = true;
+      for(const std::shared_ptr<const Registration> & registration : registrations) {
+         if(nullptr != registration) {
+            bNoMatch = registration->AttemptCreate(pConfig, sRegistration, sRegistrationEnd, pWrapperOut);
+            if(!bNoMatch) {
+               break;
+            }
+         }
+      }
+
+      LOG_0(Trace_Info, "Exited Registrable::CreateRegistrable");
+      return bNoMatch;
+   }
 
    virtual ~Registration() = default;
 };
 
-template<template <typename> class TRegistrable, typename TFloat, typename... Args>
+template<typename TFloat, template <typename> class TRegistrable, typename... Args>
 class RegistrationPack final : public Registration {
 
    // this lambda function holds our templated parameter pack until we need it
    std::function<bool(
-      const bool bCpuOnly,
+      const ComputeFlags zones,
       const Config * const pConfig,
       const char * const sRegistration,
       const char * const sRegistrationEnd,
@@ -219,7 +270,7 @@ class RegistrationPack final : public Registration {
 
    template<typename... ArgsConverted>
    static bool CheckAndCallNew(
-      const bool bCpuOnly,
+      const ComputeFlags zones,
       const Config * const pConfig,
       const char * const sRegistration,
       const char * const sRegistrationEnd,
@@ -258,7 +309,7 @@ class RegistrationPack final : public Registration {
             EBM_ASSERT(nullptr != pRegistrable); // since allocation already happened
             EBM_ASSERT(pRegistrableMemory == pRegistrable);
             // this cannot fail or throw exceptions.  It takes ownership of our pRegistrable pointer
-            pRegistrable->FillWrapper(bCpuOnly, pWrapperOut);
+            pRegistrable->FillWrapper(zones, pWrapperOut);
             return false;
          } catch(const SkipRegistrationException &) {
             AlignedFree(pRegistrableMemory);
@@ -289,26 +340,26 @@ class RegistrationPack final : public Registration {
       const char * const sRegistrationEnd,
       void * const pWrapperOut
    ) const override {
-      sRegistration = CheckRegistrationName(sRegistration, sRegistrationEnd);
+      sRegistration = CheckRegistrationName(sRegistration, sRegistrationEnd, m_sRegistrationName);
       if(nullptr == sRegistration) {
          // we are not the specified registration function
          return true;
       }
 
       // m_callBack contains the parameter pack that our constructor was created with, so we're regaining access here
-      return m_callBack(m_bCpuOnly, pConfig, sRegistration, sRegistrationEnd, pWrapperOut);
+      return m_callBack(m_zones, pConfig, sRegistration, sRegistrationEnd, pWrapperOut);
    }
 
 public:
 
-   RegistrationPack(const bool bCpuOnly, const char * sRegistrationName, const Args &... args) : Registration(bCpuOnly, sRegistrationName) {
+   RegistrationPack(const ComputeFlags zones, const char * sRegistrationName, const Args &... args) : Registration(zones, sRegistrationName) {
 
       std::vector<const char *> usedParamNames;
       UnpackRecursive(usedParamNames, args...);
 
       // hide our parameter pack in a lambda so that we don't have to think about it yet. The lambda also makes a copy.
       m_callBack = [args...](
-         const bool bCpuOnlyLambda,
+         const ComputeFlags zonesLambda,
          const Config * const pConfig,
          const char * const sRegistration,
          const char * const sRegistrationEnd,
@@ -326,7 +377,7 @@ public:
          // the UnpackParam functions are called, but we are guaranteed that they are all called before 
          // CheckAndCallNew is called, so inside there we verify whether all the parameters were used
          return CheckAndCallNew(
-            bCpuOnlyLambda,
+            zonesLambda,
             pConfig,
             sRegistration,
             sRegistrationEnd,
@@ -337,10 +388,17 @@ public:
    }
 };
 
-template<template <typename> class TRegistrable, typename TFloat, typename... Args>
-std::shared_ptr<const Registration> Register(const bool bCpuOnly, const char * const sRegistrationName, const Args &... args) {
+template<typename TFloat, template <typename> class TRegistrable, ComputeFlags zones, typename... Args>
+typename std::enable_if<0 != (TFloat::k_zone & zones), std::shared_ptr<const Registration>>::type Register(const char * const sRegistrationName, const Args &... args) {
+   static_assert(0 != (ComputeFlags_Cpu & zones), "Must specify ComputeFlags_Cpu in the call to Register to have a fallback CPU zone handler.");
    // ideally we'd be returning unique_ptr here, but we pass this to an initialization list which doesn't work in C++11
-   return std::make_shared<const RegistrationPack<TRegistrable, TFloat, Args...>>(bCpuOnly, sRegistrationName, args...);
+   return std::make_shared<const RegistrationPack<TFloat, TRegistrable, Args...>>(zones, sRegistrationName, args...);
+}
+
+template<typename TFloat, template <typename> class TRegistrable, ComputeFlags zones, typename... Args>
+typename std::enable_if<0 == (TFloat::k_zone & zones), std::shared_ptr<const Registration>>::type Register(const char * const, const Args &...) {
+   static_assert(0 != (ComputeFlags_Cpu & zones), "Must specify ComputeFlags_Cpu in the call to Register to have a fallback CPU zone handler.");
+   return nullptr;
 }
 
 } // DEFINED_ZONE_NAME

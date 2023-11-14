@@ -2,21 +2,21 @@
 // Licensed under the MIT license.
 // Author: Paul Koch <code@koch.ninja>
 
-#include "precompiled_header_cpp.hpp"
+#define _CRT_SECURE_NO_DEPRECATE
 
 #include <cmath> // exp, log
 #include <limits> // numeric_limits
 #include <type_traits> // is_unsigned
-#include <immintrin.h> // SIMD.  Do not include in precompiled_header_cpp.hpp!
+#include <immintrin.h> // SIMD.  Do not include in pch.hpp!
 
 #include "libebm.h"
 #include "logging.h"
-#include "common_c.h"
-#include "bridge_c.h"
-#include "zones.h"
+#include "unzoned.h"
 
-#include "common_cpp.hpp"
-#include "bridge_cpp.hpp"
+#include "zones.h"
+#include "bridge.h"
+#include "common.hpp"
+#include "bridge.hpp"
 
 #include "Registration.hpp"
 #include "Objective.hpp"
@@ -28,6 +28,9 @@ namespace DEFINED_ZONE_NAME {
 #ifndef DEFINED_ZONE_NAME
 #error DEFINED_ZONE_NAME must be defined
 #endif // DEFINED_ZONE_NAME
+
+// this is super-special and included inside the zone namespace
+#include "objective_registrations.hpp"
 
 static constexpr size_t k_cAlignment = 32;
 
@@ -42,7 +45,7 @@ struct alignas(k_cAlignment) Avx2_32_Int final {
    static_assert(std::is_unsigned<T>::value, "T must be an unsigned integer type");
    static_assert(std::is_same<UIntBig, T>::value || std::is_same<UIntSmall, T>::value, 
       "T must be either UIntBig or UIntSmall");
-   static constexpr bool k_bCpu = false;
+   static constexpr ComputeFlags k_zone = ComputeFlags_AVX2;
    static constexpr int k_cSIMDShift = 3;
    static constexpr int k_cSIMDPack = 1 << k_cSIMDShift;
 
@@ -121,7 +124,7 @@ struct alignas(k_cAlignment) Avx2_32_Float final {
    using TInt = Avx2_32_Int;
    static_assert(std::is_same<FloatBig, T>::value || std::is_same<FloatSmall, T>::value,
       "T must be either FloatBig or FloatSmall");
-   static constexpr bool k_bCpu = TInt::k_bCpu;
+   static constexpr ComputeFlags k_zone = TInt::k_zone;
    static constexpr int k_cSIMDShift = TInt::k_cSIMDShift;
    static constexpr int k_cSIMDPack = TInt::k_cSIMDPack;
 
@@ -309,6 +312,107 @@ struct alignas(k_cAlignment) Avx2_32_Float final {
       func(7, a0[7], a1[7]);
    }
 
+   template<typename TFunc>
+   static inline void Execute(const TFunc & func, const Avx2_32_Int & val0, const Avx2_32_Float & val1) noexcept {
+      alignas(k_cAlignment) TInt::T a0[k_cSIMDPack];
+      val0.Store(a0);
+      alignas(k_cAlignment) T a1[k_cSIMDPack];
+      val1.Store(a1);
+
+      func(0, a0[0], a1[0]);
+      func(1, a0[1], a1[1]);
+      func(2, a0[2], a1[2]);
+      func(3, a0[3], a1[3]);
+      func(4, a0[4], a1[4]);
+      func(5, a0[5], a1[5]);
+      func(6, a0[6], a1[6]);
+      func(7, a0[7], a1[7]);
+   }
+
+   template<typename TFunc>
+   static inline void Execute(const TFunc & func, const Avx2_32_Int & val0, const Avx2_32_Float & val1, const Avx2_32_Float & val2) noexcept {
+      alignas(k_cAlignment) TInt::T a0[k_cSIMDPack];
+      val0.Store(a0);
+      alignas(k_cAlignment) T a1[k_cSIMDPack];
+      val1.Store(a1);
+      alignas(k_cAlignment) T a2[k_cSIMDPack];
+      val2.Store(a2);
+
+      func(0, a0[0], a1[0], a2[0]);
+      func(1, a0[1], a1[1], a2[1]);
+      func(2, a0[2], a1[2], a2[2]);
+      func(3, a0[3], a1[3], a2[3]);
+      func(4, a0[4], a1[4], a2[4]);
+      func(5, a0[5], a1[5], a2[5]);
+      func(6, a0[6], a1[6], a2[6]);
+      func(7, a0[7], a1[7], a2[7]);
+   }
+
+   template<typename TFunc>
+   static inline void Execute(const TFunc & func, const Avx2_32_Int & val0, const Avx2_32_Float & val1, const Avx2_32_Float & val2, const Avx2_32_Float & val3) noexcept {
+      alignas(k_cAlignment) TInt::T a0[k_cSIMDPack];
+      val0.Store(a0);
+      alignas(k_cAlignment) T a1[k_cSIMDPack];
+      val1.Store(a1);
+      alignas(k_cAlignment) T a2[k_cSIMDPack];
+      val2.Store(a2);
+      alignas(k_cAlignment) T a3[k_cSIMDPack];
+      val3.Store(a3);
+
+      func(0, a0[0], a1[0], a2[0], a3[0]);
+      func(1, a0[1], a1[1], a2[1], a3[1]);
+      func(2, a0[2], a1[2], a2[2], a3[2]);
+      func(3, a0[3], a1[3], a2[3], a3[3]);
+      func(4, a0[4], a1[4], a2[4], a3[4]);
+      func(5, a0[5], a1[5], a2[5], a3[5]);
+      func(6, a0[6], a1[6], a2[6], a3[6]);
+      func(7, a0[7], a1[7], a2[7], a3[7]);
+   }
+
+   template<typename TFunc>
+   static inline void Execute(const TFunc & func, const Avx2_32_Int & val0, const Avx2_32_Int & val1, const Avx2_32_Float & val2, const Avx2_32_Float & val3) noexcept {
+      alignas(k_cAlignment) TInt::T a0[k_cSIMDPack];
+      val0.Store(a0);
+      alignas(k_cAlignment) TInt::T a1[k_cSIMDPack];
+      val1.Store(a1);
+      alignas(k_cAlignment) T a2[k_cSIMDPack];
+      val2.Store(a2);
+      alignas(k_cAlignment) T a3[k_cSIMDPack];
+      val3.Store(a3);
+
+      func(0, a0[0], a1[0], a2[0], a3[0]);
+      func(1, a0[1], a1[1], a2[1], a3[1]);
+      func(2, a0[2], a1[2], a2[2], a3[2]);
+      func(3, a0[3], a1[3], a2[3], a3[3]);
+      func(4, a0[4], a1[4], a2[4], a3[4]);
+      func(5, a0[5], a1[5], a2[5], a3[5]);
+      func(6, a0[6], a1[6], a2[6], a3[6]);
+      func(7, a0[7], a1[7], a2[7], a3[7]);
+   }
+
+   template<typename TFunc>
+   static inline void Execute(const TFunc & func, const Avx2_32_Int & val0, const Avx2_32_Int & val1, const Avx2_32_Float & val2, const Avx2_32_Float & val3, const Avx2_32_Float & val4) noexcept {
+      alignas(k_cAlignment) TInt::T a0[k_cSIMDPack];
+      val0.Store(a0);
+      alignas(k_cAlignment) TInt::T a1[k_cSIMDPack];
+      val1.Store(a1);
+      alignas(k_cAlignment) T a2[k_cSIMDPack];
+      val2.Store(a2);
+      alignas(k_cAlignment) T a3[k_cSIMDPack];
+      val3.Store(a3);
+      alignas(k_cAlignment) T a4[k_cSIMDPack];
+      val4.Store(a4);
+
+      func(0, a0[0], a1[0], a2[0], a3[0], a4[0]);
+      func(1, a0[1], a1[1], a2[1], a3[1], a4[1]);
+      func(2, a0[2], a1[2], a2[2], a3[2], a4[2]);
+      func(3, a0[3], a1[3], a2[3], a3[3], a4[3]);
+      func(4, a0[4], a1[4], a2[4], a3[4], a4[4]);
+      func(5, a0[5], a1[5], a2[5], a3[5], a4[5]);
+      func(6, a0[6], a1[6], a2[6], a3[6], a4[6]);
+      func(7, a0[7], a1[7], a2[7], a3[7], a4[7]);
+   }
+
    friend inline Avx2_32_Float IfLess(const Avx2_32_Float & cmp1, const Avx2_32_Float & cmp2, const Avx2_32_Float & trueVal, const Avx2_32_Float & falseVal) noexcept {
       const __m256 mask = _mm256_cmp_ps(cmp1.m_data, cmp2.m_data, _CMP_LT_OQ);
       return Avx2_32_Float(_mm256_blendv_ps(falseVal.m_data, trueVal.m_data, mask));
@@ -485,23 +589,23 @@ struct alignas(k_cAlignment) Avx2_32_Float final {
    }
 
 
-   template<typename TObjective, size_t cCompilerScores, bool bValidation, bool bWeight, bool bHessian, int cCompilerPack>
+   template<typename TObjective, bool bValidation, bool bWeight, bool bHessian, bool bDisableApprox, size_t cCompilerScores, int cCompilerPack>
    INLINE_RELEASE_TEMPLATED static ErrorEbm OperatorApplyUpdate(const Objective * const pObjective, ApplyUpdateBridge * const pData) noexcept {
-      RemoteApplyUpdate<TObjective, cCompilerScores, bValidation, bWeight, bHessian, cCompilerPack>(pObjective, pData);
+      RemoteApplyUpdate<TObjective, bValidation, bWeight, bHessian, bDisableApprox, cCompilerScores, cCompilerPack>(pObjective, pData);
       return Error_None;
    }
 
 
-   template<bool bHessian, size_t cCompilerScores, bool bWeight, bool bReplication, int cCompilerPack>
+   template<bool bHessian, bool bWeight, bool bReplication, size_t cCompilerScores, int cCompilerPack>
    INLINE_RELEASE_TEMPLATED static ErrorEbm OperatorBinSumsBoosting(BinSumsBoostingBridge * const pParams) noexcept {
-      RemoteBinSumsBoosting<Avx2_32_Float, bHessian, cCompilerScores, bWeight, bReplication, cCompilerPack>(pParams);
+      RemoteBinSumsBoosting<Avx2_32_Float, bHessian, bWeight, bReplication, cCompilerScores, cCompilerPack>(pParams);
       return Error_None;
    }
 
 
-   template<bool bHessian, size_t cCompilerScores, size_t cCompilerDimensions, bool bWeight>
+   template<bool bHessian, bool bWeight, size_t cCompilerScores, size_t cCompilerDimensions>
    INLINE_RELEASE_TEMPLATED static ErrorEbm OperatorBinSumsInteraction(BinSumsInteractionBridge * const pParams) noexcept {
-      RemoteBinSumsInteraction<Avx2_32_Float, bHessian, cCompilerScores, cCompilerDimensions, bWeight>(pParams);
+      RemoteBinSumsInteraction<Avx2_32_Float, bHessian, bWeight, cCompilerScores, cCompilerDimensions>(pParams);
       return Error_None;
    }
 
@@ -516,19 +620,62 @@ private:
 static_assert(std::is_standard_layout<Avx2_32_Float>::value && std::is_trivially_copyable<Avx2_32_Float>::value,
    "This allows offsetof, memcpy, memset, inter-language, GPU and cross-machine use where needed");
 
-// FIRST, define the RegisterObjective function that we'll be calling from our registrations.  This is a static 
-// function, so we can have duplicate named functions in other files and they'll refer to different functions
-template<template <typename> class TRegistrable, bool bCpuOnly, typename... Args>
-INLINE_ALWAYS static typename std::enable_if<bCpuOnly, std::shared_ptr<const Registration>>::type RegisterObjective(const char * const, const Args &...) {
-   return nullptr;
-}
-template<template <typename> class TRegistrable, bool bCpuOnly, typename... Args>
-INLINE_ALWAYS static typename std::enable_if<!bCpuOnly, std::shared_ptr<const Registration>>::type RegisterObjective(const char * const sRegistrationName, const Args &... args) {
-   return Register<TRegistrable, Avx2_32_Float>(bCpuOnly, sRegistrationName, args...);
+INTERNAL_IMPORT_EXPORT_BODY ErrorEbm ApplyUpdate_Avx2_32(
+   const ObjectiveWrapper * const pObjectiveWrapper,
+   ApplyUpdateBridge * const pData
+) {
+   const Objective * const pObjective = static_cast<const Objective *>(pObjectiveWrapper->m_pObjective);
+   const APPLY_UPDATE_CPP pApplyUpdateCpp =
+      (static_cast<FunctionPointersCpp*>(pObjectiveWrapper->m_pFunctionPointersCpp))->m_pApplyUpdateCpp;
+
+   // all our memory should be aligned. It is required by SIMD for correctness or performance
+   EBM_ASSERT(IsAligned(pData->m_aMulticlassMidwayTemp));
+   EBM_ASSERT(IsAligned(pData->m_aUpdateTensorScores));
+   EBM_ASSERT(IsAligned(pData->m_aPacked));
+   EBM_ASSERT(IsAligned(pData->m_aTargets));
+   EBM_ASSERT(IsAligned(pData->m_aWeights));
+   EBM_ASSERT(IsAligned(pData->m_aSampleScores));
+   EBM_ASSERT(IsAligned(pData->m_aGradientsAndHessians));
+
+   return (*pApplyUpdateCpp)(pObjective, pData);
 }
 
-// now include all our special objective registrations which will use the RegisterObjective function we defined above!
-#include "objective_registrations.hpp"
+INTERNAL_IMPORT_EXPORT_BODY ErrorEbm BinSumsBoosting_Avx2_32(
+   const ObjectiveWrapper * const pObjectiveWrapper,
+   BinSumsBoostingBridge * const pParams
+) {
+   const BIN_SUMS_BOOSTING_CPP pBinSumsBoostingCpp =
+      (static_cast<FunctionPointersCpp *>(pObjectiveWrapper->m_pFunctionPointersCpp))->m_pBinSumsBoostingCpp;
+
+   // all our memory should be aligned. It is required by SIMD for correctness or performance
+   EBM_ASSERT(IsAligned(pParams->m_aGradientsAndHessians));
+   EBM_ASSERT(IsAligned(pParams->m_aWeights));
+   EBM_ASSERT(IsAligned(pParams->m_pCountOccurrences));
+   EBM_ASSERT(IsAligned(pParams->m_aPacked));
+   EBM_ASSERT(IsAligned(pParams->m_aFastBins));
+
+   return (*pBinSumsBoostingCpp)(pParams);
+}
+
+INTERNAL_IMPORT_EXPORT_BODY ErrorEbm BinSumsInteraction_Avx2_32(
+   const ObjectiveWrapper * const pObjectiveWrapper,
+   BinSumsInteractionBridge * const pParams
+) {
+   const BIN_SUMS_INTERACTION_CPP pBinSumsInteractionCpp =
+      (static_cast<FunctionPointersCpp *>(pObjectiveWrapper->m_pFunctionPointersCpp))->m_pBinSumsInteractionCpp;
+
+#ifndef NDEBUG
+   // all our memory should be aligned. It is required by SIMD for correctness or performance
+   EBM_ASSERT(IsAligned(pParams->m_aGradientsAndHessians));
+   EBM_ASSERT(IsAligned(pParams->m_aWeights));
+   EBM_ASSERT(IsAligned(pParams->m_aFastBins));
+   for(size_t iDebug = 0; iDebug < pParams->m_cRuntimeRealDimensions; ++iDebug) {
+      EBM_ASSERT(IsAligned(pParams->m_aaPacked[iDebug]));
+   }
+#endif // NDEBUG
+
+   return (*pBinSumsInteractionCpp)(pParams);
+}
 
 INTERNAL_IMPORT_EXPORT_BODY ErrorEbm CreateObjective_Avx2_32(
    const Config * const pConfig,
@@ -536,11 +683,14 @@ INTERNAL_IMPORT_EXPORT_BODY ErrorEbm CreateObjective_Avx2_32(
    const char * const sObjectiveEnd,
    ObjectiveWrapper * const pObjectiveWrapperOut
 ) {
+   pObjectiveWrapperOut->m_pApplyUpdateC = ApplyUpdate_Avx2_32;
+   pObjectiveWrapperOut->m_pBinSumsBoostingC = BinSumsBoosting_Avx2_32;
+   pObjectiveWrapperOut->m_pBinSumsInteractionC = BinSumsInteraction_Avx2_32;
    ErrorEbm error = ComputeWrapper<Avx2_32_Float>::FillWrapper(pObjectiveWrapperOut);
    if(Error_None != error) {
       return error;
    }
-   return Objective::CreateObjective(&RegisterObjectives, pConfig, sObjective, sObjectiveEnd, pObjectiveWrapperOut);
+   return Objective::CreateObjective<Avx2_32_Float>(pConfig, sObjective, sObjectiveEnd, pObjectiveWrapperOut);
 }
 
 } // DEFINED_ZONE_NAME
